@@ -1,0 +1,13 @@
+# Web framework -- serves the API the desktop (and later mobile/web) app talks to
+fastapi>=0.115
+uvicorn[standard]>=0.32
+
+# Database: ORM + migrations. SQLite for now; both are chosen specifically
+# because they also work against Postgres later with minimal code changes,
+# which matters if this ever becomes a hosted multi-user product.
+sqlalchemy>=2.0
+alembic>=1.13
+
+# Settings loaded from .env, same pattern as discord-checkout-tracker
+python-dotenv>=1.0
+pydantic-settings>=2.5

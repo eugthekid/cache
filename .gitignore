@@ -1,0 +1,16 @@
+# Secrets -- never commit these
+backend/.env
+
+# Python virtual environment and caches
+backend/.venv/
+**/__pycache__/
+*.pyc
+
+# The local database lives outside this folder (see backend/app/config.py),
+# but ignore it here too in case that ever changes.
+*.db
+
+# macOS clutter
+.DS_Store
+
+# desktop/ has its own .gitignore for node_modules, dist, out, etc.
