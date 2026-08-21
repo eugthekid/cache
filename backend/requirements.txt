@@ -11,3 +11,7 @@ alembic>=1.13
 # Settings loaded from .env, same pattern as discord-checkout-tracker
 python-dotenv>=1.0
 pydantic-settings>=2.5
+
+# Required by FastAPI to parse UploadFile/multipart form data -- used by
+# the spreadsheet-import and backup-restore endpoints.
+python-multipart>=0.0.12

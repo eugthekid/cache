@@ -41,6 +41,16 @@ class Settings(BaseSettings):
     api_port: int = 8000
 
 
+# !!! TEMPORARY -- v1-only, MUST be replaced before public launch or any
+# real payment. There is no per-customer key issuance yet: every friend/
+# tester activates with this same shared key. It is visible to anyone who
+# inspects the app bundle, so it provides zero real security -- it exists
+# only to exercise the activation screen while there are no real customers
+# to issue real keys to. See the "inventory-tracker-activation-key" memory
+# note for the swap-before-launch reminder.
+TEST_LICENSE_KEY = "CACH-BETA-0001-TEST"
+
+
 settings = Settings()
 
 # Make sure the database's parent folder exists before SQLAlchemy tries to

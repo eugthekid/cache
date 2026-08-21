@@ -35,6 +35,7 @@ class OrderCreate(BaseModel):
     profile: Optional[str] = None
     site: Optional[str] = None
     module: Optional[str] = None
+    category: Optional[str] = None
     quantity: Optional[int] = None
     unit_price: Optional[float] = None
     currency: str = "USD"
@@ -62,6 +63,7 @@ class OrderUpdate(BaseModel):
     raw_product_text: Optional[str] = None
     profile: Optional[str] = None
     site: Optional[str] = None
+    category: Optional[str] = None
     quantity: Optional[int] = None
     unit_price: Optional[float] = None
     order_number: Optional[str] = None
@@ -85,6 +87,7 @@ class OrderOut(BaseModel):
     profile: Optional[str]
     site: Optional[str]
     module: Optional[str]
+    category: Optional[str]
     quantity: Optional[int]
     unit_price: Optional[float]
     currency: str
@@ -131,3 +134,30 @@ class InventoryItemOut(BaseModel):
     sold_platform: Optional[str]
     notes: Optional[str]
     created_at: datetime
+
+
+class SettingOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    key: str
+    value: dict[str, Any]
+    updated_at: datetime
+
+
+class SettingUpdate(BaseModel):
+    """The whole value is replaced, not merged -- callers own the full
+    shape of their setting (e.g. the complete dashboard-prefs object)."""
+
+    value: dict[str, Any]
+
+
+class LicenseActivate(BaseModel):
+    key: str
+
+
+class LicenseStatus(BaseModel):
+    activated: bool
+    # Last 4 characters only -- enough for a user to recognize their own
+    # key on the Settings screen, never enough to reconstruct it.
+    key_suffix: Optional[str] = None
+    activated_at: Optional[datetime] = None

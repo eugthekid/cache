@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 
 from app import crud
 from app.database import get_db
-from app.routers import inventory, orders, sources
+from app.routers import backup, dashboard, inventory, license, orders, sources
+from app.routers import settings as settings_router
 
 app = FastAPI(title="Inventory Tracker API")
 
@@ -31,6 +32,10 @@ app.add_middleware(
 app.include_router(sources.router)
 app.include_router(orders.router)
 app.include_router(inventory.router)
+app.include_router(dashboard.router)
+app.include_router(settings_router.router)
+app.include_router(license.router)
+app.include_router(backup.router)
 
 
 @app.get("/health")

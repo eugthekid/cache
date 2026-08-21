@@ -17,6 +17,42 @@ def list_inventory(status: Optional[str] = None, db: Session = Depends(get_db)):
     return query.order_by(models.InventoryItem.created_at.desc()).all()
 
 
+# NOTE: literal-path routes (like /summary below) must be registered BEFORE
+# any /{item_id}-style route on the same router. FastAPI/Starlette matches
+# in registration order, so a /{item_id} route defined first will greedily
+# swallow "summary" as if it were an id -- this bit us once already; keep
+# every new literal path above this comment, not below it.
+@router.get("/summary")
+def inventory_summary(db: Session = Depends(get_db)):
+    """
+    Quick spend/value rollup -- the kind of number a dashboard's top line
+    would show. Deliberately simple (Python-side aggregation, not raw SQL)
+    since this is a scaffold; worth moving to a SQL GROUP BY if this ever
+    needs to run over a large inventory.
+
+    `total_cost_basis` IS total spend: every inventory_item's cost_basis is
+    copied from its order's unit_price at creation time (crud.create_order),
+    so summing it across every item equals summing unit_price*quantity
+    across every success order -- no separate calculation needed.
+    `est_inventory_value` is narrower on purpose: only cost_basis for units
+    still actually held (in_hand/listed), not sold/returned/lost ones.
+    """
+    items = db.query(models.InventoryItem).all()
+    unsold_statuses = {"in_hand", "listed"}
+    return {
+        "total_units": len(items),
+        "in_hand": sum(1 for i in items if i.status == "in_hand"),
+        "listed": sum(1 for i in items if i.status == "listed"),
+        "sold": sum(1 for i in items if i.status == "sold"),
+        "total_cost_basis": sum(i.cost_basis or 0 for i in items),
+        "total_sold_revenue": sum(i.sold_price or 0 for i in items if i.status == "sold"),
+        "est_inventory_value": sum(
+            i.cost_basis or 0 for i in items if i.status in unsold_statuses
+        ),
+        "order_count": db.query(models.Order).count(),
+    }
+
+
 @router.get("/{item_id}", response_model=schemas.InventoryItemOut)
 def get_inventory_item(item_id: str, db: Session = Depends(get_db)):
     item = db.query(models.InventoryItem).filter_by(id=item_id).first()
@@ -39,22 +75,3 @@ def update_inventory_item(
     if item is None:
         raise HTTPException(status_code=404, detail="Inventory item not found")
     return crud.update_inventory_item(db, item, item_in)
-
-
-@router.get("/summary")
-def inventory_summary(db: Session = Depends(get_db)):
-    """
-    Quick spend/value rollup -- the kind of number a dashboard's top line
-    would show. Deliberately simple (Python-side aggregation, not raw SQL)
-    since this is a scaffold; worth moving to a SQL GROUP BY if this ever
-    needs to run over a large inventory.
-    """
-    items = db.query(models.InventoryItem).all()
-    return {
-        "total_units": len(items),
-        "in_hand": sum(1 for i in items if i.status == "in_hand"),
-        "listed": sum(1 for i in items if i.status == "listed"),
-        "sold": sum(1 for i in items if i.status == "sold"),
-        "total_cost_basis": sum(i.cost_basis or 0 for i in items),
-        "total_sold_revenue": sum(i.sold_price or 0 for i in items if i.status == "sold"),
-    }
