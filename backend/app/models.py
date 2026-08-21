@@ -174,6 +174,15 @@ class InventoryItem(Base):
     order_id: Mapped[str | None] = mapped_column(ForeignKey("orders.id"), default=None)
     unit_index: Mapped[int | None] = mapped_column(default=None)  # "1 of 2", "2 of 2"
 
+    # Only meaningful when order_id is NULL -- a unit linked to an order
+    # already has a product name via order.raw_product_text, so this stays
+    # empty for those rather than duplicating it. Exists specifically for
+    # spreadsheet-imported "stock I already hold" rows (see
+    # docs/DATA-MODEL.md's Spreadsheet import section): without an order,
+    # there was nowhere at all to record what the physical unit actually
+    # IS, which made that import mode useless -- found while building it.
+    product_text: Mapped[str | None] = mapped_column(default=None)
+
     # 'in_hand' | 'listed' | 'sold' | 'returned' | 'lost'
     status: Mapped[str] = mapped_column(default="in_hand")
 

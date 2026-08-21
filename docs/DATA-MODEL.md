@@ -143,19 +143,35 @@ Two modes, because two different situations exist:
 | Mode | Creates | `order_id` |
 |---|---|---|
 | **A purchase** — the row is a checkout, with a date/site/price | an `orders` row, plus one `inventory_items` row per quantity if `status='success'` | set |
-| **A unit I hold** — the row is stock, with a cost basis and no purchase history | an `inventory_items` row directly | `NULL` |
+| **A unit I hold** — the row is stock, with a cost basis and no purchase history | `quantity` standalone `inventory_items` rows directly | `NULL` |
+
+The "unit I hold" mode is the reason `inventory_items.product_text` exists
+(nullable, meaningful only when `order_id` is `NULL`): a unit linked to an
+order already has a product name via `order.raw_product_text`, but a
+standalone imported unit had nowhere to record what it even IS until this
+field was added — found while actually building this feature, not
+anticipated when the schema was first designed.
 
 Column mapping is user-driven with auto-guessed defaults, never fixed
 positions — real spreadsheets use `Item Name`/`Paid`/`Where`, not our field
-names. Rows that can't be parsed (unreadable date, missing price) are
-reported and **skipped**, never silently coerced to a default, and the row
-count shown on the confirm button is the count that will actually be
-written.
+names. Rows that can't be parsed (unreadable date, missing price, an
+unrecognized status word) are reported and **skipped**, never silently
+coerced to a default, and the row count shown on the confirm button is the
+count that will actually be written — `preview` and `commit` run every row
+through the exact same evaluation function specifically so those two can
+never disagree.
 
-Duplicates match existing orders on `(source, external_id)` where an order
-number exists, and are **skipped rather than merged** — consistent with
-Discord dedup. Re-importing a corrected spreadsheet therefore won't update
-existing rows; an "update existing" mode is a separate, later decision.
+Duplicates match on **`order_number` alone**, checked against every
+existing order regardless of source — not `(source, external_id)` the way
+Discord ingestion dedups. That's deliberate, not an oversight: each import
+run gets its own fresh `sources` row (see below), so `source_id` is never
+shared across two imports, or between an import and a Discord-ingested
+order for the same real-world purchase — only the order number itself can
+catch a duplicate across sources. Rows sharing an order number *within the
+same file* are also caught, not just ones already in the database.
+Duplicates are **skipped rather than merged**, consistent with Discord
+dedup: re-importing a corrected spreadsheet won't update existing rows; an
+"update existing" mode is a separate, later decision.
 
 ## Migrating existing `discord-checkout-tracker` data
 

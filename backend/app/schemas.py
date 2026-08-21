@@ -110,6 +110,7 @@ class InventoryItemUpdate(BaseModel):
     """
 
     status: Optional[str] = None  # 'in_hand' | 'listed' | 'sold' | 'returned' | 'lost'
+    product_text: Optional[str] = None
     cost_basis: Optional[float] = None
     listed_price: Optional[float] = None
     listed_platform: Optional[str] = None
@@ -126,6 +127,7 @@ class InventoryItemOut(BaseModel):
     order_id: Optional[str]
     unit_index: Optional[int]
     status: str
+    product_text: Optional[str]
     cost_basis: Optional[float]
     listed_price: Optional[float]
     listed_platform: Optional[str]
