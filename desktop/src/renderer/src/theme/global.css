@@ -1,0 +1,354 @@
+/**
+ * global.css
+ * ----------
+ * Ported from the Cache design canvas (Direction B, glass treatment) --
+ * this is the same component vocabulary (.card, .pill, .btn-primary,
+ * .navitem, .select, .field-input) used consistently across every
+ * mockup, now as real CSS instead of per-artboard inline <style> blocks.
+ * Screens should compose these classes rather than inventing new ones;
+ * see docs/DATA-MODEL.md-adjacent design notes for why the vocabulary
+ * matters (it's what makes wireframing every individual button
+ * unnecessary -- see the empty-states conversation).
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+:root {
+  --font-display: 'Space Grotesk', system-ui, sans-serif;
+  --font-body: 'IBM Plex Sans', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  --bg: oklch(12% 0.012 260);
+  --rail-bg: oklch(26% 0.025 255 / 0.4);
+  --card-bg: oklch(34% 0.03 255 / 0.34);
+  --card-border: oklch(85% 0.02 250 / 0.14);
+  --card-border-top: oklch(96% 0.01 250 / 0.34);
+  --field-bg: oklch(20% 0.014 255 / 0.5);
+  --field-border: oklch(85% 0.02 250 / 0.16);
+  --divider: oklch(85% 0.02 250 / 0.12);
+
+  --text-primary: oklch(96% 0.004 255);
+  --text-secondary: oklch(84% 0.012 255);
+  --text-muted: oklch(72% 0.014 255);
+  --text-faint: oklch(60% 0.014 255);
+
+  --accent-cyan: oklch(78% 0.12 215);
+  --accent-violet: oklch(72% 0.16 292);
+  --accent-gradient: linear-gradient(135deg, var(--accent-cyan), var(--accent-violet));
+
+  --status-success: oklch(78% 0.17 150);
+  --status-success-bg: oklch(78% 0.17 150 / 0.2);
+  --status-failed: oklch(74% 0.19 25);
+  --status-failed-bg: oklch(74% 0.19 25 / 0.2);
+  --status-warn: oklch(80% 0.15 85);
+  --status-warn-bg: oklch(80% 0.15 85 / 0.2);
+  --status-neutral: oklch(72% 0.012 255);
+  --status-neutral-bg: oklch(80% 0.01 255 / 0.14);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden; /* the app shell owns its own scroll regions */
+}
+
+a {
+  color: var(--accent-cyan);
+}
+
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* --- surfaces -------------------------------------------------------- */
+
+.card {
+  background: var(--card-bg);
+  -webkit-backdrop-filter: blur(26px) saturate(165%);
+  backdrop-filter: blur(26px) saturate(165%);
+  border: 1px solid var(--card-border);
+  border-top-color: var(--card-border-top);
+  border-radius: 16px;
+  box-shadow:
+    0 22px 44px -18px oklch(8% 0 0 / 0.6),
+    0 0 40px -8px oklch(70% 0.15 225 / 0.38),
+    inset 0 1px 0 oklch(97% 0 0 / 0.1);
+}
+
+/* --- buttons ----------------------------------------------------------- */
+
+.btn-primary,
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 600;
+  border-radius: 9px;
+  padding: 9px 16px;
+  cursor: pointer;
+  border: none;
+  transition:
+    box-shadow 0.15s ease,
+    transform 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.btn-primary {
+  background: var(--accent-gradient);
+  color: oklch(14% 0.01 255);
+  box-shadow: 0 6px 22px -4px oklch(68% 0.15 240 / 0.6);
+}
+.btn-primary:hover {
+  box-shadow: 0 8px 24px -3px oklch(65% 0.14 240 / 0.65);
+  transform: translateY(-1px);
+}
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+  transform: none;
+}
+
+.btn-ghost {
+  border: 1px solid var(--card-border);
+  color: var(--text-primary);
+  background: oklch(90% 0.02 250 / 0.06);
+}
+.btn-ghost:hover {
+  border-color: oklch(85% 0.05 250 / 0.4);
+  background: oklch(90% 0.02 250 / 0.12);
+}
+
+/* --- form controls ------------------------------------------------------ */
+
+.field-label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.field-input,
+.select {
+  border: 1px solid var(--field-border);
+  background: var(--field-bg);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text-primary);
+  transition: border-color 0.15s ease;
+  width: 100%;
+}
+.field-input:hover,
+.select:hover,
+.field-input:focus,
+.select:focus {
+  border-color: oklch(85% 0.04 250 / 0.34);
+  outline: none;
+}
+
+select.select {
+  appearance: none;
+}
+
+/* --- status pills -------------------------------------------------------- */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 3px 8px 3px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.pill .dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+  background: currentColor;
+}
+
+.pill-success {
+  background: var(--status-success-bg);
+  color: var(--status-success);
+}
+.pill-failed {
+  background: var(--status-failed-bg);
+  color: var(--status-failed);
+}
+.pill-warn {
+  background: var(--status-warn-bg);
+  color: var(--status-warn);
+}
+.pill-neutral {
+  background: var(--status-neutral-bg);
+  color: var(--status-neutral);
+}
+
+/* --- nav rail -------------------------------------------------------------- */
+
+.nav-rail {
+  width: 212px;
+  flex-shrink: 0;
+  background: var(--rail-bg);
+  -webkit-backdrop-filter: blur(28px) saturate(150%);
+  backdrop-filter: blur(28px) saturate(150%);
+  border-right: 1px solid var(--divider);
+  display: flex;
+  flex-direction: column;
+  padding: 24px 14px;
+  box-sizing: border-box;
+  gap: 26px;
+}
+
+.navitem {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 13px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+}
+.navitem:hover {
+  background: oklch(90% 0.02 250 / 0.1);
+  color: var(--text-primary);
+}
+.navitem.active {
+  background: linear-gradient(135deg, oklch(60% 0.1 215 / 0.4), oklch(55% 0.14 292 / 0.4));
+  color: oklch(97% 0.03 250);
+  box-shadow: inset 0 1px 0 oklch(97% 0 0 / 0.16);
+}
+.navitem svg {
+  flex-shrink: 0;
+}
+
+/* --- table rows ------------------------------------------------------------ */
+
+.row {
+  transition: background 0.12s ease;
+}
+tr.row:hover td {
+  background: oklch(90% 0.02 250 / 0.08);
+}
+div.row:hover {
+  background: oklch(90% 0.02 250 / 0.08);
+}
+
+th {
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding: 0 8px 10px;
+}
+td {
+  padding: 11px 8px;
+  font-size: 12.5px;
+  border-top: 1px solid oklch(29% 0.017 255);
+}
+
+/* --- app shell ------------------------------------------------------------- */
+
+.app-shell {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  position: relative;
+}
+
+.main-content {
+  flex: 1;
+  position: relative;
+  padding: 28px 36px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  overflow: hidden;
+}
+
+.screen-title {
+  font-family: var(--font-display);
+  font-size: 23px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.logo-mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--accent-gradient);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 0 18px -2px oklch(70% 0.15 240 / 0.6);
+}
+
+.link-action {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent-cyan);
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.link-action:hover {
+  color: oklch(88% 0.1 215);
+}

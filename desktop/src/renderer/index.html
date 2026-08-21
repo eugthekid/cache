@@ -2,15 +2,18 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>Electron</title>
+    <title>Cache</title>
     <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP
          connect-src explicitly allows fetch() to the local FastAPI backend --
          without it, default-src 'self' silently blocks every request to it
          (no console error beyond "Failed to fetch", easy to mistake for a
-         networking problem when it's actually CSP). -->
+         networking problem when it's actually CSP).
+         style-src/font-src allow Google Fonts (Space Grotesk, IBM Plex) --
+         googleapis.com serves the stylesheet, gstatic.com serves the actual
+         font files; both are needed, not just one. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:8000 http://localhost:8000"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' http://127.0.0.1:8000 http://localhost:8000"
     />
   </head>
 

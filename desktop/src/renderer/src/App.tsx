@@ -1,88 +1,102 @@
 import { useEffect, useState } from 'react'
-import { api, type CurrentUser, type InventorySummary } from './api'
+import { api } from './api/client'
+import Activation from './screens/Activation'
+import Dashboard from './screens/Dashboard'
+import NavRail, { type Screen } from './components/NavRail'
+import WavyBackground from './components/WavyBackground'
 
-type ConnectionState = 'connecting' | 'connected' | 'error'
+type GateState = 'checking' | 'needs-activation' | 'unreachable' | 'ready'
 
 function App(): React.JSX.Element {
-  const [state, setState] = useState<ConnectionState>('connecting')
-  const [user, setUser] = useState<CurrentUser | null>(null)
-  const [summary, setSummary] = useState<InventorySummary | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [gate, setGate] = useState<GateState>('checking')
+  const [screen, setScreen] = useState<Screen>('dashboard')
+  const [userEmail, setUserEmail] = useState('')
 
   useEffect(() => {
-    let cancelled = false
-
-    async function load(): Promise<void> {
-      try {
-        await api.health()
-        const [meResult, summaryResult] = await Promise.all([api.me(), api.inventorySummary()])
-        if (cancelled) return
-        setUser(meResult)
-        setSummary(summaryResult)
-        setState('connected')
-      } catch (err) {
-        if (cancelled) return
-        setError(err instanceof Error ? err.message : String(err))
-        setState('error')
-      }
-    }
-
-    load()
-    return () => {
-      cancelled = true
-    }
+    checkGate()
   }, [])
 
+  async function checkGate(): Promise<void> {
+    setGate('checking')
+    try {
+      await api.health()
+      const me = await api.me()
+      setUserEmail(me.email)
+
+      if (localStorage.getItem('cache_trial_mode') === 'true') {
+        setGate('ready')
+        return
+      }
+      const license = await api.license.status()
+      setGate(license.activated ? 'ready' : 'needs-activation')
+    } catch {
+      setGate('unreachable')
+    }
+  }
+
+  if (gate === 'checking') {
+    return (
+      <div style={{ width: '100vw', height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-faint)' }}>
+        Connecting…
+      </div>
+    )
+  }
+
+  if (gate === 'unreachable') {
+    return (
+      <div style={{ width: '100vw', height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="card" style={{ padding: '28px 32px', maxWidth: 420, textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 17, fontWeight: 700 }}>Can&rsquo;t reach the backend</div>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+            Your data is safe on disk — the local server just isn&rsquo;t responding.
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+            Make sure it&rsquo;s running: <code>cd backend && ./run.sh</code>
+          </div>
+          <button className="btn-primary" onClick={checkGate} style={{ marginTop: 6 }}>
+            Retry
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (gate === 'needs-activation') {
+    return <Activation onActivated={checkGate} />
+  }
+
   return (
-    <div style={{ fontFamily: 'system-ui, sans-serif', padding: '2rem', maxWidth: 480 }}>
-      <h1>Inventory Tracker</h1>
-
-      {state === 'connecting' && <p>Connecting to backend…</p>}
-
-      {state === 'error' && (
-        <div style={{ color: '#c0392b' }}>
-          <p>
-            <strong>Couldn't reach the backend.</strong>
-          </p>
-          <p>Make sure it's running: <code>cd backend && ./run.sh</code></p>
-          <p style={{ fontSize: '0.85em', opacity: 0.7 }}>{error}</p>
-        </div>
-      )}
-
-      {state === 'connected' && user && summary && (
-        <div>
-          <p style={{ color: '#27ae60' }}>✓ Connected as {user.email}</p>
-          <table style={{ borderCollapse: 'collapse', width: '100%' }}>
-            <tbody>
-              <tr>
-                <td>Total units tracked</td>
-                <td>{summary.total_units}</td>
-              </tr>
-              <tr>
-                <td>In hand</td>
-                <td>{summary.in_hand}</td>
-              </tr>
-              <tr>
-                <td>Listed</td>
-                <td>{summary.listed}</td>
-              </tr>
-              <tr>
-                <td>Sold</td>
-                <td>{summary.sold}</td>
-              </tr>
-              <tr>
-                <td>Total cost basis</td>
-                <td>${summary.total_cost_basis.toFixed(2)}</td>
-              </tr>
-              <tr>
-                <td>Total sold revenue</td>
-                <td>${summary.total_sold_revenue.toFixed(2)}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      )}
+    <div className="app-shell">
+      <NavRail active={screen} onNavigate={setScreen} userEmail={userEmail} />
+      <div className="main-content">
+        <WavyBackground />
+        {screen === 'dashboard' && <Dashboard />}
+        {screen === 'orders' && <ComingSoon title="Orders" />}
+        {screen === 'inventory' && <ComingSoon title="Inventory" />}
+        {screen === 'settings' && <ComingSoon title="Settings" />}
+      </div>
     </div>
+  )
+}
+
+function ComingSoon({ title }: { title: string }): React.JSX.Element {
+  return (
+    <>
+      <div className="screen-title">{title}</div>
+      <div
+        className="card"
+        style={{
+          flex: 1,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--text-faint)',
+          fontSize: 13
+        }}
+      >
+        {title} is built on the backend — this screen is next.
+      </div>
+    </>
   )
 }
 
