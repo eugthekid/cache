@@ -1,9 +1,9 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app import models, schemas
+from app import crud, models, schemas
 from app.database import get_db
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
@@ -15,6 +15,30 @@ def list_inventory(status: Optional[str] = None, db: Session = Depends(get_db)):
     if status:
         query = query.filter(models.InventoryItem.status == status)
     return query.order_by(models.InventoryItem.created_at.desc()).all()
+
+
+@router.get("/{item_id}", response_model=schemas.InventoryItemOut)
+def get_inventory_item(item_id: str, db: Session = Depends(get_db)):
+    item = db.query(models.InventoryItem).filter_by(id=item_id).first()
+    if item is None:
+        raise HTTPException(status_code=404, detail="Inventory item not found")
+    return item
+
+
+@router.patch("/{item_id}", response_model=schemas.InventoryItemOut)
+def update_inventory_item(
+    item_id: str, item_in: schemas.InventoryItemUpdate, db: Session = Depends(get_db)
+):
+    """
+    The endpoint the Inventory detail panel's "Save changes" actually calls
+    -- marking something listed/sold/returned, editing cost basis, setting
+    a sale price and platform. See crud.update_inventory_item for the one
+    business rule attached: marking 'sold' fills in sold_at if omitted.
+    """
+    item = db.query(models.InventoryItem).filter_by(id=item_id).first()
+    if item is None:
+        raise HTTPException(status_code=404, detail="Inventory item not found")
+    return crud.update_inventory_item(db, item, item_in)
 
 
 @router.get("/summary")

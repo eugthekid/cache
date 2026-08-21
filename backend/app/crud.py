@@ -9,6 +9,7 @@ of which endpoint (or, later, which ingestion source) triggers them.
 from sqlalchemy.orm import Session
 
 from app import models
+from app.models import _now
 
 
 def get_or_create_default_user(db: Session) -> models.User:
@@ -53,3 +54,36 @@ def create_order(db: Session, user_id: str, order_in) -> models.Order:
         db.commit()
 
     return order
+
+
+def update_order(db: Session, order: models.Order, order_in) -> models.Order:
+    """
+    Applies only the fields the client actually sent (exclude_unset), so a
+    client that's only changing shipping_status doesn't accidentally null
+    out everything else it omitted.
+    """
+    for field, value in order_in.model_dump(exclude_unset=True).items():
+        setattr(order, field, value)
+    db.commit()
+    db.refresh(order)
+    return order
+
+
+def update_inventory_item(
+    db: Session, item: models.InventoryItem, item_in
+) -> models.InventoryItem:
+    """
+    Same partial-update pattern as update_order, plus one business rule:
+    marking a unit 'sold' without an explicit sold_at fills in "now" --
+    the UI's "mark as sold" action shouldn't require a separate date entry
+    for the common case of selling something today.
+    """
+    updates = item_in.model_dump(exclude_unset=True)
+    if updates.get("status") == "sold" and "sold_at" not in updates and item.sold_at is None:
+        updates["sold_at"] = _now()
+
+    for field, value in updates.items():
+        setattr(item, field, value)
+    db.commit()
+    db.refresh(item)
+    return item

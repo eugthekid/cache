@@ -53,3 +53,19 @@ def get_order(order_id: str, db: Session = Depends(get_db)):
     if order is None:
         raise HTTPException(status_code=404, detail="Order not found")
     return order
+
+
+@router.patch("/{order_id}", response_model=schemas.OrderOut)
+def update_order(order_id: str, order_in: schemas.OrderUpdate, db: Session = Depends(get_db)):
+    """
+    Edits an existing order -- correcting a typo, updating shipping status
+    as a package moves, changing status/failure_reason by hand. Does NOT
+    retroactively spawn or remove inventory_items if status changes to/from
+    'success' after the fact; that's a deliberate v1 limitation, not an
+    oversight -- see the note in docs/DATA-MODEL.md if that ever needs to
+    change.
+    """
+    order = db.query(models.Order).filter_by(id=order_id).first()
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return crud.update_order(db, order, order_in)

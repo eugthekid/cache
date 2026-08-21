@@ -69,7 +69,14 @@ per-order aggregate tracking can't represent that.
 
 **Business rule (enforced in `app/crud.py`, not the schema):** only orders
 with `status='success'` ever produce `inventory_items` — a failed checkout
-never had physical goods to track.
+never had physical goods to track. This only runs at creation time —
+`PATCH /orders/{id}` editing `status` after the fact does **not**
+retroactively spawn or delete `inventory_items`. Editing a typo'd status is
+a rare, manual correction; silently materializing or deleting physical
+units as a side effect of an edit is the kind of implicit behavior that
+causes real data-integrity surprises later. If this ever needs to change,
+it should be an explicit action ("create inventory for this order"), not an
+implicit consequence of a status edit.
 
 **`order_id` is nullable.** A unit usually traces back to the purchase that
 created it, but not always: spreadsheet import (below) lets you record stock

@@ -40,8 +40,37 @@ class OrderCreate(BaseModel):
     currency: str = "USD"
     order_number: Optional[str] = None
     order_url: Optional[str] = None
+    # 'not_shipped' | 'label_created' | 'in_transit' | 'delivered' | 'exception'
+    shipping_status: str = "not_shipped"
+    tracking_number: Optional[str] = None
+    ship_to_label: Optional[str] = None
+    ship_to_address: Optional[str] = None
     purchased_at: Optional[datetime] = None
     raw_json: dict[str, Any] = {}
+
+
+class OrderUpdate(BaseModel):
+    """
+    A partial update -- only fields that are actually editable after an
+    order's been created. `exclude_unset=True` on the receiving end means a
+    client only sends the fields it's actually changing; omitted fields are
+    left alone rather than getting overwritten with None.
+    """
+
+    status: Optional[str] = None
+    failure_reason: Optional[str] = None
+    raw_product_text: Optional[str] = None
+    profile: Optional[str] = None
+    site: Optional[str] = None
+    quantity: Optional[int] = None
+    unit_price: Optional[float] = None
+    order_number: Optional[str] = None
+    order_url: Optional[str] = None
+    shipping_status: Optional[str] = None
+    tracking_number: Optional[str] = None
+    ship_to_label: Optional[str] = None
+    ship_to_address: Optional[str] = None
+    purchased_at: Optional[datetime] = None
 
 
 class OrderOut(BaseModel):
@@ -61,8 +90,30 @@ class OrderOut(BaseModel):
     currency: str
     order_number: Optional[str]
     order_url: Optional[str]
+    shipping_status: str
+    tracking_number: Optional[str]
+    ship_to_label: Optional[str]
+    ship_to_address: Optional[str]
     purchased_at: Optional[datetime]
     created_at: datetime
+
+
+class InventoryItemUpdate(BaseModel):
+    """
+    Covers the whole lifecycle a unit moves through: in_hand -> listed ->
+    sold (or returned/lost at any point). `sold_at` is optional on purpose
+    -- if a client marks something sold without sending a timestamp,
+    crud.update_inventory_item fills in "now" rather than leaving it null.
+    """
+
+    status: Optional[str] = None  # 'in_hand' | 'listed' | 'sold' | 'returned' | 'lost'
+    cost_basis: Optional[float] = None
+    listed_price: Optional[float] = None
+    listed_platform: Optional[str] = None
+    sold_price: Optional[float] = None
+    sold_at: Optional[datetime] = None
+    sold_platform: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class InventoryItemOut(BaseModel):
