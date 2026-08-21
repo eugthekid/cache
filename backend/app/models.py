@@ -111,6 +111,13 @@ class Order(Base):
     site: Mapped[str | None] = mapped_column(default=None)
     module: Mapped[str | None] = mapped_column(default=None)
 
+    # Free text, same as `site`/`profile` -- NOT a foreign key into a
+    # category table. Real product matching is deferred to v2 (see
+    # `products` below); this exists only so the dashboard's by-category
+    # breakdown has something real to group by in the meantime, set by
+    # hand or guessed by the Discord/import ingestion layer.
+    category: Mapped[str | None] = mapped_column(default=None)
+
     quantity: Mapped[int | None] = mapped_column(default=None)
     unit_price: Mapped[float | None] = mapped_column(default=None)
     currency: Mapped[str] = mapped_column(default="USD")
