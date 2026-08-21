@@ -11,21 +11,34 @@ product or mobile app doesn't require a rewrite.
 
 ## Status
 
-**Scaffold stage.** The backend's core data model (`users` → `sources` →
-`orders` → `inventory_items`) is built, migrated, and verified against real
-HTTP requests. The desktop app is a working Electron/React/TypeScript shell
-that connects to the backend and displays a live inventory summary. Nothing
-ingests real data yet — no Discord bot, no email scraping, no market
-pricing. See [`docs/DATA-MODEL.md`](docs/DATA-MODEL.md) for the schema and
+**Backend built and verified; Discord ingestion wired up; desktop UI not
+started yet.** The data model (`users` → `sources` → `orders` →
+`inventory_items`, plus `app_settings`) is migrated and covered by real
+HTTP tests, not just imports. Beyond basic CRUD, the API also has: dashboard
+aggregation (monthly spend/revenue, aging, retailer/category breakdowns),
+settings read/write, v1 license activation, and full-fidelity backup/restore
+as a single `.cache` bundle. `bot/` is a separate Discord bot — ported from
+`discord-checkout-tracker`, POSTing into this API instead of writing to its
+own SQLite file — that backfills a channel's history and then listens live,
+classifying every checkout attempt (success/failed/cancelled), not just
+successes. The desktop app is still the original Electron/React shell from
+the scaffold; the actual screens (designed in Claude Design, see the app's
+own design canvas) haven't been built as real components yet. See
+[`docs/DATA-MODEL.md`](docs/DATA-MODEL.md) for the schema and
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the backend/frontend
-split and what's been verified so far.
+split.
+
+**Note on naming:** the product is now called **Cache** in the UI designs;
+the project folder/repo stayed `inventory-tracker` deliberately (an internal
+codename, not user-facing) — see the activation-key memory note for why.
 
 ## Project layout
 
 | Path | What it is |
 |---|---|
 | `backend/` | FastAPI + SQLAlchemy + Alembic API server, SQLite for now |
-| `desktop/` | Electron + React + TypeScript desktop app (scaffolded with `electron-vite`) |
+| `bot/` | Discord bot — ingests checkouts into the backend via HTTP, ported from `discord-checkout-tracker` |
+| `desktop/` | Electron + React + TypeScript desktop app (scaffolded with `electron-vite`, screens not yet built) |
 | `docs/DATA-MODEL.md` | The entity design and the reasoning behind each decision |
 | `docs/ARCHITECTURE.md` | Backend/frontend split, why, and what's verified |
 
@@ -38,6 +51,13 @@ python3 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
 ./.venv/bin/alembic upgrade head   # creates the database
 ./run.sh                            # http://127.0.0.1:8000
+
+# Discord bot (separate terminal, optional -- requires the backend running)
+cd bot
+python3 -m venv .venv
+./.venv/bin/pip install -r requirements.txt
+cp .env.example .env               # fill in DISCORD_TOKEN and GUILD_ID
+./run.sh
 
 # Desktop app (separate terminal)
 cd desktop
@@ -52,22 +72,20 @@ generates these automatically from the routers and Pydantic schemas).
 
 Roughly in order:
 
-1. **Port Discord ingestion** — adapt `discord-checkout-tracker`'s bot to
-   POST into this API's `/orders` endpoint instead of writing to its own
-   SQLite table directly. The parsing/detection logic (multi-bot
-   success/failure classification) carries over almost unchanged; see
-   `docs/DATA-MODEL.md` for how `status`/`failure_reason` map onto it.
-2. **Migrate existing checkout history** from `discord-checkout-tracker`'s
+1. **Migrate existing checkout history** from `discord-checkout-tracker`'s
    database into this schema (mapping described in `docs/DATA-MODEL.md`).
-3. **Build out the desktop UI** — an actual orders/inventory list, not just
-   a summary screen.
-4. **Email ingestion** — OAuth-based inbox access + structured extraction
+   Now that the bot itself is ported, this is a one-time backfill script,
+   not new ingestion logic.
+2. **Build out the desktop UI** — the actual Dashboard/Orders/Inventory/
+   Settings/Activation screens, designed already, wired to the real API
+   instead of the current placeholder summary view.
+3. **Email ingestion** — OAuth-based inbox access + structured extraction
    for order confirmations, starting with 2-3 retailers before generalizing.
-5. **Market pricing (v2 schema)** — `products` + `market_prices` tables,
+4. **Market pricing (v2 schema)** — `products` + `market_prices` tables,
    starting with sneakers/streetwear (StockX-style data — note: no official
    public API, so this needs a deliberately pluggable price-source design,
    flagged in `docs/DATA-MODEL.md`).
-6. **Customizable dashboard (v2, widgets)** — the dashboard mockups landed on
+5. **Customizable dashboard (v2, widgets)** — the dashboard mockups landed on
    individual panels having their own view switcher (e.g. the inventory-age
    panel toggling between age / retailer / category breakdowns). The natural
    next step is letting users add, remove, resize, and rearrange panels

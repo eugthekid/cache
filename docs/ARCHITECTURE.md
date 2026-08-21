@@ -41,11 +41,44 @@ server (not just "it compiles"):
   rule holds)
 - Re-posting the same `(source_id, external_id)` returns the existing
   order rather than duplicating it (dedup works)
-- `/inventory/summary` aggregates correctly
+- Partial updates (`PATCH /orders/{id}`, `PATCH /inventory/{id}`) leave
+  untouched fields alone; marking an item sold with no `sold_at` fills in
+  "now"
+- Dashboard aggregation (`/dashboard/monthly`, `/aging`, `/by-retailer`,
+  `/by-category`) checked against hand-computed expected values from
+  planted test data, not just "the endpoint returns 200"
+- Settings upsert, license activation (including whitespace/case
+  tolerance and rejecting a wrong key), and full backup export → preview →
+  restore round-trip, including the schema-version-mismatch rejection and
+  the pre-restore safety copy
 
-**Desktop app — verified running.** `npm run dev` launches the actual
-Electron process (confirmed alive via its PID, not just "the command didn't
-error"), connected to the backend.
+**Caught and fixed during that verification pass:** `GET /inventory/summary`
+was silently returning 404s, because it was registered in the router file
+*after* `GET /inventory/{item_id}` — FastAPI matches routes in registration
+order, so `{item_id}` greedily matched the literal string `summary` as if
+it were an id. Fixed by moving literal-path routes above parameterized ones,
+with a comment on the router explaining why the order matters (see
+`backend/app/routers/inventory.py`).
+
+**`bot/` — verified two ways**, deliberately without needing real Discord
+credentials for most of it:
+- `bot/src/parser.py`'s `classify_checkout()` (the status classifier that
+  replaces `discord-checkout-tracker`'s success/reject boolean gate) is
+  checked against mock embeds mimicking all three real bot patterns —
+  including HayhaAIO's misleading case, a card titled "Successful
+  Checkout!" that's actually cancelled, only revealed by a `Cancel Reason`
+  field. 18 assertions, run with plain `python3`, no discord.py needed.
+- `bot/src/api_client.py` verified against a live backend: source
+  get-or-create caching, a full parsed record posting correctly end to
+  end, and the dedup no-op on a repeat `external_id`.
+- Not yet verified: the actual `discord.Client` connection and message
+  handling in `bot/src/bot.py` — that needs a real bot token and a real
+  Discord server, which don't exist yet (see the README's status note).
+
+**Desktop app — verified running, but still the original scaffold shell.**
+`npm run dev` launches the actual Electron process (confirmed alive via its
+PID, not just "the command didn't error"), connected to the backend. The
+real screens (designed since) haven't been built as components yet.
 
 ### Known issue: `extract-zip` silently breaks Electron's install
 

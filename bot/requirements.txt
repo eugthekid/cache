@@ -1,0 +1,12 @@
+# Discord bot library (client, embeds) -- same version constraint as
+# discord-checkout-tracker's, since this bot's Discord-side behavior is
+# ported from it unchanged.
+discord.py>=2.3,<3
+
+# Async HTTP client for talking to the backend. Async specifically because
+# backfill can make hundreds of sequential API calls inside discord.py's
+# own event loop -- see api_client.py's docstring for why a blocking
+# client (requests) would risk the bot missing Discord's heartbeat.
+httpx>=0.27
+
+python-dotenv>=1.0

@@ -1,0 +1,71 @@
+"""
+config.py
+---------
+Same .env-loading pattern as discord-checkout-tracker's config.py (and this
+project's backend/app/config.py): secrets and machine-specific settings
+live in .env, never in code.
+
+Ported wholesale from discord-checkout-tracker: the token, guild/channel
+scoping, and SUCCESS_KEYWORD logic are unchanged, because the Discord-side
+behavior (which channels to watch, how to recognize a checkout card) hasn't
+changed -- only where a parsed checkout ends up afterward has (see
+api_client.py). discord-checkout-tracker itself is left untouched; this is
+a new, separate bot, not a modification of that project.
+"""
+
+import os
+from typing import Optional
+
+from dotenv import load_dotenv
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+
+
+def _require(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(
+            f"Missing required setting '{name}'. "
+            f"Copy .env.example to .env and fill it in."
+        )
+    return value
+
+
+# --- Required settings ---
+DISCORD_TOKEN: str = _require("DISCORD_TOKEN")
+GUILD_ID: int = int(_require("GUILD_ID"))
+
+_raw_channels = (os.getenv("CHANNEL_IDS") or "").strip()
+SCAN_ALL_CHANNELS: bool = _raw_channels.lower() == "all"
+CHANNEL_IDS: set[int] = (
+    set()
+    if SCAN_ALL_CHANNELS
+    else {int(x) for x in _raw_channels.replace(",", " ").split() if x}
+)
+
+if not SCAN_ALL_CHANNELS and not CHANNEL_IDS:
+    raise RuntimeError(
+        "No channels configured. In your .env set CHANNEL_IDS=all to watch the "
+        "whole server, or CHANNEL_IDS=<id>,<id> to watch specific channels."
+    )
+
+
+def should_scan(channel_id: int) -> bool:
+    if channel_id == CHANGELOG_CHANNEL_ID:
+        return False
+    return SCAN_ALL_CHANNELS or channel_id in CHANNEL_IDS
+
+
+# --- Optional settings ---
+SUCCESS_KEYWORD: str = os.getenv("SUCCESS_KEYWORD", "success")
+
+_raw_changelog_channel = os.getenv("CHANGELOG_CHANNEL_ID", "").strip()
+CHANGELOG_CHANNEL_ID: Optional[int] = (
+    int(_raw_changelog_channel) if _raw_changelog_channel else None
+)
+
+# --- New for inventory-tracker: where the FastAPI backend lives. Every
+# parsed checkout is POSTed here instead of written to a local SQLite file
+# the way discord-checkout-tracker's database.py did.
+API_BASE_URL: str = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")

@@ -1,8 +1,10 @@
 # Secrets -- never commit these
 backend/.env
+bot/.env
 
 # Python virtual environment and caches
 backend/.venv/
+bot/.venv/
 **/__pycache__/
 *.pyc
 
