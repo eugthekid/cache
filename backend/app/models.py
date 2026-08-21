@@ -45,6 +45,7 @@ class User(Base):
     sources: Mapped[list["Source"]] = relationship(back_populates="user")
     orders: Mapped[list["Order"]] = relationship(back_populates="user")
     inventory_items: Mapped[list["InventoryItem"]] = relationship(back_populates="user")
+    app_settings: Mapped[list["AppSetting"]] = relationship(back_populates="user")
 
 
 class Source(Base):
@@ -117,6 +118,21 @@ class Order(Base):
     order_number: Mapped[str | None] = mapped_column(default=None)
     order_url: Mapped[str | None] = mapped_column(default=None)
 
+    # Deliberately separate from `status`: a checkout can succeed while the
+    # package is still in transit, and a failed/cancelled order simply never
+    # progresses past 'not_shipped' -- one combined enum can't represent
+    # "succeeded but not yet delivered".
+    # 'not_shipped' | 'label_created' | 'in_transit' | 'delivered' | 'exception'
+    shipping_status: Mapped[str] = mapped_column(default="not_shipped")
+    tracking_number: Mapped[str | None] = mapped_column(default=None)
+
+    # Denormalized on purpose for now: a short label a list column can show
+    # ("Home", "Apt 4C") plus the full address as text. Worth its own table
+    # once addresses are reused enough to be worth managing separately --
+    # not yet (see docs/DATA-MODEL.md).
+    ship_to_label: Mapped[str | None] = mapped_column(default=None)
+    ship_to_address: Mapped[str | None] = mapped_column(default=None)
+
     # When the checkout actually happened, per the source (e.g. Discord's
     # message timestamp) -- distinct from created_at, which is when WE saw it.
     purchased_at: Mapped[datetime | None] = mapped_column(default=None)
@@ -166,3 +182,31 @@ class InventoryItem(Base):
 
     user: Mapped["User"] = relationship(back_populates="inventory_items")
     order: Mapped["Order | None"] = relationship(back_populates="inventory_items")
+
+
+class AppSetting(Base):
+    """
+    A flexible key-value store for things that aren't order/inventory data:
+    dashboard chart preferences, the backup schedule, local license state.
+    JSON `value` means each setting holds whatever shape it needs -- a
+    boolean, a small object, a list -- without a schema change per setting.
+
+    Deliberately not a dedicated table per concern (e.g. no `licenses`
+    table): none of this is relational data, there's one row per (user,
+    key), and the license state today is just a hardcoded test key with no
+    real structure yet (see the memory note on swapping it before launch).
+    """
+    __tablename__ = "app_settings"
+    __table_args__ = (
+        UniqueConstraint("user_id", "key", name="uq_app_settings_user_key"),
+    )
+
+    id: Mapped[str] = mapped_column(primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+
+    # e.g. 'dashboard_prefs', 'backup_schedule', 'license'
+    key: Mapped[str]
+    value: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(default=_now)
+
+    user: Mapped["User"] = relationship(back_populates="app_settings")

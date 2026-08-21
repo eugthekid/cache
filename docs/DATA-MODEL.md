@@ -9,8 +9,9 @@ and applied via the Alembic migration in `backend/alembic/versions/`.
 users
   └─< sources ─────────────┐
   └─< orders ───────────────┤ (order.source_id → sources)
-        │                   │
-        └─< inventory_items │
+  │     │                   │
+  │     └─< inventory_items │
+  └─< app_settings
 ```
 
 ### `users`
@@ -44,6 +45,22 @@ order to a canonical catalog entry) is deliberately **deferred to v2** — see
 below. Until then, the free-text product description is what's displayed
 and searched on directly.
 
+**Fulfillment fields (`orders`, migration `e12eb6e313c4`):** `shipping_status`
+(`'not_shipped' | 'label_created' | 'in_transit' | 'delivered' |
+'exception'`), `tracking_number`, and a ship-to address. Shipping status is
+deliberately **separate from `status`**, not folded into it: an order can be
+a checkout success while the package is still in transit, and a failed
+checkout has no shipping state at all (rendered as `—`, not as a status).
+Collapsing them into one enum would make "succeeded but not yet delivered"
+unrepresentable.
+
+The address is a short label (`Home`, `Apt 4C`, `Parents`) plus the full
+address. Resellers ship to several addresses across profiles, and the label
+is what a list column can usefully show. Whether this becomes its own
+`addresses` table or stays denormalized on `orders` is still open — a table
+is the better normalization, but it's only worth it once addresses are
+reused enough to be worth managing separately.
+
 ### `inventory_items`
 One row per **physical unit** you hold — an order for `quantity=2` produces
 two of these. This is the granularity resale actually needs: you might sell
@@ -53,6 +70,26 @@ per-order aggregate tracking can't represent that.
 **Business rule (enforced in `app/crud.py`, not the schema):** only orders
 with `status='success'` ever produce `inventory_items` — a failed checkout
 never had physical goods to track.
+
+**`order_id` is nullable.** A unit usually traces back to the purchase that
+created it, but not always: spreadsheet import (below) lets you record stock
+you already hold with a cost basis and no purchase record behind it. Rather
+than inventing a synthetic placeholder order to satisfy a NOT NULL — which
+would pollute spend totals and order counts with purchases that never
+happened — the link is simply absent. Anything reading `order_id` must
+handle `None`; anything aggregating spend counts `orders`, and anything
+counting units counts `inventory_items`, so the two stay independent.
+
+### `app_settings`
+A flexible key-value store, `(user_id, key)` unique, `value` as JSON — for
+things that aren't order/inventory data: dashboard chart preferences (which
+view is default, the enabled extra chart toggles), the backup schedule, and
+local license state. Not split into dedicated tables per concern (no
+`licenses` table, no `dashboard_preferences` table) because none of it is
+relational — there's exactly one row per (user, key), and giving each its
+own table would be schema surface with no query benefit. The license value
+today is just the hardcoded test key described in memory — swap that logic
+before public launch, not this table.
 
 ## Entities (v2 — deferred, not built yet)
 
@@ -83,6 +120,35 @@ anything built in v1.
 | Inventory tracked per physical unit | Matches how resale actually works — partial sell-through of a multi-quantity order needs distinct rows. |
 | Product catalog + market pricing deferred | Get orders + inventory solid first; avoid the hardest problem (fuzzy-matching free text to a catalog) before the core workflow is even proven. |
 | `products` not scoped to `user_id` | Catalog data is shared across users; order/inventory data is not. Conflating them would duplicate catalog data per user in a hosted future. |
+| `inventory_items.order_id` nullable | Imported stock may have no purchase record. A synthetic placeholder order would corrupt spend totals and order counts with purchases that never happened. |
+| Shipping status separate from order status | "Checkout succeeded, package still in transit" is a real and common state that one combined enum can't express. |
+
+## Spreadsheet import
+
+Importing an existing `.xlsx`/`.csv` is an ingestion source like any other —
+it gets a `sources` row (`type='import'`, with the filename and import
+timestamp in `config`), so imported orders dedup, filter, and trace back
+exactly like Discord-ingested ones. Each import run being its own source row
+also makes an import reversible: delete the source, delete what it created.
+
+Two modes, because two different situations exist:
+
+| Mode | Creates | `order_id` |
+|---|---|---|
+| **A purchase** — the row is a checkout, with a date/site/price | an `orders` row, plus one `inventory_items` row per quantity if `status='success'` | set |
+| **A unit I hold** — the row is stock, with a cost basis and no purchase history | an `inventory_items` row directly | `NULL` |
+
+Column mapping is user-driven with auto-guessed defaults, never fixed
+positions — real spreadsheets use `Item Name`/`Paid`/`Where`, not our field
+names. Rows that can't be parsed (unreadable date, missing price) are
+reported and **skipped**, never silently coerced to a default, and the row
+count shown on the confirm button is the count that will actually be
+written.
+
+Duplicates match existing orders on `(source, external_id)` where an order
+number exists, and are **skipped rather than merged** — consistent with
+Discord dedup. Re-importing a corrected spreadsheet therefore won't update
+existing rows; an "update existing" mode is a separate, later decision.
 
 ## Migrating existing `discord-checkout-tracker` data
 

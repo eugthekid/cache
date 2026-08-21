@@ -67,3 +67,13 @@ Roughly in order:
    starting with sneakers/streetwear (StockX-style data — note: no official
    public API, so this needs a deliberately pluggable price-source design,
    flagged in `docs/DATA-MODEL.md`).
+6. **Customizable dashboard (v2, widgets)** — the dashboard mockups landed on
+   individual panels having their own view switcher (e.g. the inventory-age
+   panel toggling between age / retailer / category breakdowns). The natural
+   next step is letting users add, remove, resize, and rearrange panels
+   themselves, like a widget board, rather than shipping one fixed layout.
+   That's a real feature on its own — persisted per-user layout state, a
+   widget registry, grid/drag logic — not something to bolt on casually, so
+   it stays explicitly out of v1 scope until the fixed dashboard has been
+   used for a while and it's clear which panels people actually want to
+   rearrange.
