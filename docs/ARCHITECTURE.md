@@ -43,15 +43,44 @@ server (not just "it compiles"):
   order rather than duplicating it (dedup works)
 - `/inventory/summary` aggregates correctly
 
-**Desktop app — partially verified.** The production build compiles
-cleanly (`npm run build`, zero errors — this runs the actual TypeScript
-compiler and bundler over the real `App.tsx`/`api.ts` code, not a stub).
-TypeScript typechecks cleanly. The Vite dev server confirmed it starts and
-serves. What's **not** verified from this environment: the live-rendered
-result in an actual Electron window, since that needs a real display this
-sandboxed environment doesn't have. Run `npm run dev` from `desktop/` on
-your own machine to see it — that's also the correct way to check a desktop
-GUI app in general, not a limitation specific to this project.
+**Desktop app — verified running.** `npm run dev` launches the actual
+Electron process (confirmed alive via its PID, not just "the command didn't
+error"), connected to the backend.
+
+### Known issue: `extract-zip` silently breaks Electron's install
+
+The first `npm install` produced an `electron` package with **no actual
+binary** — `node_modules/electron/dist/` contained only a license file.
+`npm audit` explains why: `extract-zip` (which Electron's own postinstall
+script uses to unpack itself) has a symlink-safety patch that silently
+truncates extraction of any zip containing symlinks — and every macOS
+`.app` bundle is full of them. The download itself is fine (verified: 585
+files, valid checksum); the extraction just quietly stops after the first
+non-symlink entry, with no error anywhere.
+
+**Fix applied:** the cached zip
+(`~/Library/Caches/electron/<hash>/electron-v<version>-darwin-arm64.zip`)
+was extracted manually with the system's `unzip` instead:
+
+```bash
+cd desktop
+rm -rf node_modules/electron/dist
+mkdir -p node_modules/electron/dist
+unzip -q ~/Library/Caches/electron/*/electron-v*-darwin-arm64.zip -d node_modules/electron/dist
+printf 'Electron.app/Contents/MacOS/Electron' > node_modules/electron/path.txt   # printf, not echo -- no trailing newline
+```
+
+That last line matters: `echo` appends a trailing `\n`, and Electron's
+launcher doesn't trim it, which produces a corrupted path and an `ENOENT`
+that's easy to misread as "the binary is missing" when it's actually just
+a malformed path string.
+
+**If a future `npm install` breaks this again** (e.g. after `rm -rf
+node_modules`), re-run the fix above rather than assuming Electron itself
+is broken. The `npm audit fix --force` suggestion (bumping Electron to a
+new major version) was deliberately not applied — a breaking version bump
+isn't the right fix for what's actually a bug in a transitive dependency's
+overly-aggressive security patch.
 
 ## Local development
 
