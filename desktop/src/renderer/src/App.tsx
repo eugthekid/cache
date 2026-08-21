@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react'
 import { api } from './api/client'
 import Activation from './screens/Activation'
 import Dashboard from './screens/Dashboard'
+import Orders from './screens/Orders'
+import Inventory from './screens/Inventory'
+import Settings from './screens/Settings'
 import NavRail, { type Screen } from './components/NavRail'
 import WavyBackground from './components/WavyBackground'
 
@@ -71,32 +74,11 @@ function App(): React.JSX.Element {
       <div className="main-content">
         <WavyBackground />
         {screen === 'dashboard' && <Dashboard />}
-        {screen === 'orders' && <ComingSoon title="Orders" />}
-        {screen === 'inventory' && <ComingSoon title="Inventory" />}
-        {screen === 'settings' && <ComingSoon title="Settings" />}
+        {screen === 'orders' && <Orders />}
+        {screen === 'inventory' && <Inventory />}
+        {screen === 'settings' && <Settings />}
       </div>
     </div>
-  )
-}
-
-function ComingSoon({ title }: { title: string }): React.JSX.Element {
-  return (
-    <>
-      <div className="screen-title">{title}</div>
-      <div
-        className="card"
-        style={{
-          flex: 1,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: 'var(--text-faint)',
-          fontSize: 13
-        }}
-      >
-        {title} is built on the backend — this screen is next.
-      </div>
-    </>
   )
 }
 

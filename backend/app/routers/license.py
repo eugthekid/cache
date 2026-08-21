@@ -69,3 +69,23 @@ def activate(body: schemas.LicenseActivate, db: Session = Depends(get_db)):
     return schemas.LicenseStatus(
         activated=True, key_suffix=submitted[-4:], activated_at=now
     )
+
+
+@router.post("/deactivate", response_model=schemas.LicenseStatus)
+def deactivate(db: Session = Depends(get_db)):
+    """
+    "Log out," in a local single-user app with no accounts: there's no
+    session to end, so this just clears the stored activation so the app
+    shows the activation screen again. The key itself isn't consumed or
+    invalidated -- re-activating with the same key works, same as it did
+    the first time. Idempotent: calling this when nothing is activated is
+    a harmless no-op, not an error, so the frontend can always call it
+    unconditionally on "log out" rather than branching on current state.
+    """
+    user = crud.get_or_create_default_user(db)
+    setting = _get_license_setting(db, user.id)
+    if setting is not None:
+        setting.value = {"activated": False}
+        setting.updated_at = _now()
+        db.commit()
+    return schemas.LicenseStatus(activated=False)

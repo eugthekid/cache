@@ -299,7 +299,8 @@ export const api = {
 
   license: {
     status: () => get<LicenseStatus>('/license/status'),
-    activate: (key: string) => post<LicenseStatus>('/license/activate', { key })
+    activate: (key: string) => post<LicenseStatus>('/license/activate', { key }),
+    deactivate: () => post<LicenseStatus>('/license/deactivate')
   },
 
   backup: {
