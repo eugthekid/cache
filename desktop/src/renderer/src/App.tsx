@@ -73,9 +73,9 @@ function App(): React.JSX.Element {
       <NavRail active={screen} onNavigate={setScreen} userEmail={userEmail} />
       <div className="main-content">
         <WavyBackground />
-        {screen === 'dashboard' && <Dashboard />}
-        {screen === 'orders' && <Orders />}
-        {screen === 'inventory' && <Inventory />}
+        {screen === 'dashboard' && <Dashboard onNavigate={setScreen} />}
+        {screen === 'orders' && <Orders onNavigate={setScreen} />}
+        {screen === 'inventory' && <Inventory onNavigate={setScreen} />}
         {screen === 'settings' && <Settings />}
       </div>
     </div>

@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react'
 import { api, type Order, type OrderStatus, type ShippingStatus } from '../api/client'
 import StatusPill from '../components/StatusPill'
+import ImportWizard from '../components/ImportWizard'
+import EmptyState from '../components/EmptyState'
+import ErrorState from '../components/ErrorState'
+import { Skel, TableSkeleton } from '../components/Skeleton'
+import type { Screen } from '../components/NavRail'
 
 const ORDER_STATUSES: OrderStatus[] = ['success', 'failed', 'cancelled', 'pending']
 const SHIPPING_STATUSES: ShippingStatus[] = ['not_shipped', 'label_created', 'in_transit', 'delivered', 'exception']
@@ -70,7 +75,7 @@ async function getOrCreateManualSource(): Promise<string> {
   return created.id
 }
 
-function Orders(): React.JSX.Element {
+function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): React.JSX.Element {
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -78,6 +83,7 @@ function Orders(): React.JSX.Element {
   const [draft, setDraft] = useState<DraftOrder>(BLANK_DRAFT)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [showImport, setShowImport] = useState(false)
 
   const isNew = selectedId === null
 
@@ -87,6 +93,7 @@ function Orders(): React.JSX.Element {
 
   async function load(): Promise<void> {
     setLoading(true)
+    setError(null)
     try {
       const list = await api.orders.list({ limit: 200 })
       setOrders(list)
@@ -161,31 +168,92 @@ function Orders(): React.JSX.Element {
   if (loading) {
     return (
       <>
-        <div className="screen-title">Orders</div>
-        <div style={{ color: 'var(--text-faint)', fontSize: 13 }}>Loading…</div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div className="screen-title">Orders</div>
+          <Skel style={{ width: 190, height: 34, borderRadius: 9 }} />
+        </div>
+        <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1.55fr 1fr', gap: 16, minHeight: 0 }}>
+          <div className="card" style={{ padding: '8px 16px 14px', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', gap: 14, padding: '16px 0 10px' }}>
+              {[2.4, 1.2, 0.7, 0.5, 0.8, 0.9].map((w, i) => (
+                <Skel key={i} style={{ flex: w, height: 10 }} />
+              ))}
+            </div>
+            <div style={{ borderTop: '1px solid var(--divider)' }} />
+            <TableSkeleton rows={7} widths={[2.4, 1.2, 0.7, 0.5, 0.8, 0.9]} />
+          </div>
+          <div className="card" style={{ padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <Skel style={{ width: 90, height: 14 }} />
+            {Array.from({ length: 5 }).map((_, i) => (
+              <Skel key={i} style={{ height: 38, borderRadius: 8 }} />
+            ))}
+          </div>
+        </div>
       </>
     )
   }
   if (error) {
-    return <div style={{ color: 'var(--status-failed)' }}>Couldn&rsquo;t load orders: {error}</div>
+    return <ErrorState screenTitle="Orders" message={error} onRetry={load} />
   }
 
   return (
     <>
       <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div className="screen-title">Orders</div>
-        <button className="btn-primary" onClick={startNew}>
-          + NEW ORDER
-        </button>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button className="btn-ghost" onClick={() => setShowImport(true)}>
+            IMPORT
+          </button>
+          <button className="btn-primary" onClick={startNew}>
+            + NEW ORDER
+          </button>
+        </div>
       </div>
 
+      {showImport && <ImportWizard onClose={() => setShowImport(false)} onImported={load} />}
+
       <div style={{ position: 'relative', flex: 1, display: 'grid', gridTemplateColumns: '1.55fr 1fr', gap: 16, minHeight: 0 }}>
-        <div className="card" style={{ padding: '8px 16px 14px', overflow: 'auto' }}>
+        <div className="card" style={{ padding: '8px 16px 14px', overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
           {orders.length === 0 ? (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-faint)', fontSize: 13, flexDirection: 'column', gap: 6 }}>
-              <div>No orders yet.</div>
-              <div style={{ fontSize: 11.5 }}>Connect Discord, import a file, or add one by hand.</div>
-            </div>
+            <>
+              <table style={{ width: '100%', borderCollapse: 'collapse', opacity: 0.4 }}>
+                <thead>
+                  <tr>
+                    <th style={{ paddingTop: 16 }}>Product</th>
+                    <th style={{ paddingTop: 16 }}>Site</th>
+                    <th style={{ paddingTop: 16 }}>Price</th>
+                    <th style={{ paddingTop: 16 }}>Qty</th>
+                    <th style={{ paddingTop: 16 }}>Status</th>
+                    <th style={{ paddingTop: 16 }}>Shipping</th>
+                  </tr>
+                </thead>
+              </table>
+              <div style={{ borderTop: '1px solid var(--divider)' }} />
+              <EmptyState
+                icon={
+                  <svg width="24" height="24" viewBox="0 0 20 20" fill="none">
+                    <path d="M5 3h7l3 3v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" stroke="oklch(80% 0.012 255)" strokeWidth="1.4" strokeLinejoin="round" />
+                    <path d="M7 9h6M7 12h6M7 15h4" stroke="oklch(80% 0.012 255)" strokeWidth="1.4" strokeLinecap="round" />
+                  </svg>
+                }
+                iconBg="oklch(90% 0.02 250 / 0.07)"
+                title="No orders yet"
+                body="Once your Discord bot is connected, checkouts land here automatically — successes and failures both."
+                actions={
+                  <>
+                    <button className="btn-primary" style={{ padding: '9px 17px', fontSize: 12.5 }} onClick={() => onNavigate?.('settings')}>
+                      Connect Discord
+                    </button>
+                    <button className="btn-ghost" style={{ padding: '9px 17px', fontSize: 12.5 }} onClick={() => setShowImport(true)}>
+                      Import a file
+                    </button>
+                    <button className="btn-ghost" style={{ padding: '9px 17px', fontSize: 12.5 }} onClick={startNew}>
+                      Add manually
+                    </button>
+                  </>
+                }
+              />
+            </>
           ) : (
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>

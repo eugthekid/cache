@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type LicenseStatus, type Source } from '../api/client'
+import ImportWizard from '../components/ImportWizard'
+import ErrorState from '../components/ErrorState'
+import { Skel } from '../components/Skeleton'
 
 function Settings(): React.JSX.Element {
   const [license, setLicense] = useState<LicenseStatus | null>(null)
   const [sources, setSources] = useState<Source[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [exportMessage, setExportMessage] = useState<string | null>(null)
   const [restoreMessage, setRestoreMessage] = useState<string | null>(null)
   const restoreInputRef = useRef<HTMLInputElement | null>(null)
+  const [showImport, setShowImport] = useState(false)
 
   useEffect(() => {
     load()
@@ -15,10 +20,13 @@ function Settings(): React.JSX.Element {
 
   async function load(): Promise<void> {
     setLoading(true)
+    setError(null)
     try {
       const [licenseStatus, sourceList] = await Promise.all([api.license.status(), api.sources.list()])
       setLicense(licenseStatus)
       setSources(sourceList)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load settings')
     } finally {
       setLoading(false)
     }
@@ -77,9 +85,23 @@ function Settings(): React.JSX.Element {
     return (
       <>
         <div className="screen-title">Settings</div>
-        <div style={{ color: 'var(--text-faint)', fontSize: 13 }}>Loading…</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 760 }}>
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="card" style={{ padding: '22px 26px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <Skel style={{ width: 150, height: 14 }} />
+              <Skel style={{ height: 1 }} />
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <Skel style={{ width: 180, height: 12 }} />
+                <Skel style={{ width: 70, height: 30, borderRadius: 9 }} />
+              </div>
+            </div>
+          ))}
+        </div>
       </>
     )
+  }
+  if (error) {
+    return <ErrorState screenTitle="Settings" message={error} onRetry={load} />
   }
 
   return (
@@ -143,9 +165,12 @@ function Settings(): React.JSX.Element {
           />
           <SettingRow
             label="Import from spreadsheet"
-            sub="Coming next — column mapping isn't wired up in the UI yet"
-            action={<span className="btn-ghost" style={{ padding: '8px 14px', fontSize: 12.5, opacity: 0.5, cursor: 'default' }}>Choose file</span>}
-            dimmed
+            sub="Bring in orders or inventory from an Excel or CSV file"
+            action={
+              <button className="btn-ghost" style={{ padding: '8px 14px', fontSize: 12.5 }} onClick={() => setShowImport(true)}>
+                Choose file
+              </button>
+            }
           />
           <SettingRow
             label="Export a backup"
@@ -177,6 +202,8 @@ function Settings(): React.JSX.Element {
           </div>
         </div>
       </div>
+
+      {showImport && <ImportWizard onClose={() => setShowImport(false)} onImported={load} />}
     </>
   )
 }

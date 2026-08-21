@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react'
 import { api, type InventoryItem, type InventoryStatus, type Order } from '../api/client'
 import StatusPill from '../components/StatusPill'
+import EmptyState from '../components/EmptyState'
+import ErrorState from '../components/ErrorState'
+import { Skel, TableSkeleton } from '../components/Skeleton'
+import ImportWizard from '../components/ImportWizard'
+import type { Screen } from '../components/NavRail'
 
 const ITEM_STATUSES: InventoryStatus[] = ['in_hand', 'listed', 'sold', 'returned', 'lost']
 
@@ -46,7 +51,7 @@ function fromOrderLabel(item: InventoryItem, ordersById: Map<string, Order>): st
   return order.purchased_at.slice(0, 10)
 }
 
-function Inventory(): React.JSX.Element {
+function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): React.JSX.Element {
   const [items, setItems] = useState<InventoryItem[]>([])
   const [ordersById, setOrdersById] = useState<Map<string, Order>>(new Map())
   const [loading, setLoading] = useState(true)
@@ -55,6 +60,7 @@ function Inventory(): React.JSX.Element {
   const [draft, setDraft] = useState<DraftItem | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [showImport, setShowImport] = useState(false)
 
   useEffect(() => {
     load()
@@ -62,6 +68,7 @@ function Inventory(): React.JSX.Element {
 
   async function load(): Promise<void> {
     setLoading(true)
+    setError(null)
     try {
       const [itemList, orderList] = await Promise.all([api.inventory.list(), api.orders.list({ limit: 200 })])
       setItems(itemList)
@@ -116,13 +123,29 @@ function Inventory(): React.JSX.Element {
   if (loading) {
     return (
       <>
-        <div className="screen-title">Inventory</div>
-        <div style={{ color: 'var(--text-faint)', fontSize: 13 }}>Loading…</div>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+          <div className="screen-title">Inventory</div>
+          <Skel style={{ width: 60, height: 12 }} />
+        </div>
+        <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1.55fr 1fr', gap: 16, minHeight: 0 }}>
+          <div className="card" style={{ padding: '8px 16px 14px', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', gap: 14, padding: '16px 0 10px' }}>
+              {[2, 1.2, 1, 0.8, 1].map((w, i) => (
+                <Skel key={i} style={{ flex: w, height: 10 }} />
+              ))}
+            </div>
+            <div style={{ borderTop: '1px solid var(--divider)' }} />
+            <TableSkeleton rows={7} widths={[2, 1.2, 1, 0.8, 1]} />
+          </div>
+          <div className="card" style={{ padding: '22px 24px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Skel style={{ width: 160, height: 14 }} />
+          </div>
+        </div>
       </>
     )
   }
   if (error) {
-    return <div style={{ color: 'var(--status-failed)' }}>Couldn&rsquo;t load inventory: {error}</div>
+    return <ErrorState screenTitle="Inventory" message={error} onRetry={load} />
   }
 
   return (
@@ -135,11 +158,43 @@ function Inventory(): React.JSX.Element {
       </div>
 
       <div style={{ position: 'relative', flex: 1, display: 'grid', gridTemplateColumns: '1.55fr 1fr', gap: 16, minHeight: 0 }}>
-        <div className="card" style={{ padding: '8px 16px 14px', overflow: 'auto' }}>
+        <div className="card" style={{ padding: '8px 16px 14px', overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
           {items.length === 0 ? (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-faint)', fontSize: 13 }}>
-              No inventory yet — it fills in once orders succeed or you import stock you hold.
-            </div>
+            <>
+              <table style={{ width: '100%', borderCollapse: 'collapse', opacity: 0.4 }}>
+                <thead>
+                  <tr>
+                    <th style={{ paddingTop: 16 }}>Product</th>
+                    <th style={{ paddingTop: 16 }}>From order</th>
+                    <th style={{ paddingTop: 16 }}>Cost basis</th>
+                    <th style={{ paddingTop: 16 }}>Status</th>
+                    <th style={{ paddingTop: 16 }}>Sale</th>
+                  </tr>
+                </thead>
+              </table>
+              <div style={{ borderTop: '1px solid var(--divider)' }} />
+              <EmptyState
+                icon={
+                  <svg width="24" height="24" viewBox="0 0 20 20" fill="none">
+                    <path d="M10 2 3 5.5 10 9l7-3.5L10 2Z" stroke="oklch(88% 0.08 250)" strokeWidth="1.4" strokeLinejoin="round" />
+                    <path d="M3 5.5V14l7 3.5 7-3.5V5.5M10 9v8.5" stroke="oklch(88% 0.08 250)" strokeWidth="1.4" strokeLinejoin="round" />
+                  </svg>
+                }
+                iconBg="oklch(60% 0.1 215 / 0.2)"
+                title="Nothing in hand yet"
+                body="It fills in once a successful order arrives or you import stock you already hold."
+                actions={
+                  <>
+                    <button className="btn-primary" style={{ padding: '9px 17px', fontSize: 12.5 }} onClick={() => onNavigate?.('orders')}>
+                      View orders
+                    </button>
+                    <button className="btn-ghost" style={{ padding: '9px 17px', fontSize: 12.5 }} onClick={() => setShowImport(true)}>
+                      Import a file
+                    </button>
+                  </>
+                }
+              />
+            </>
           ) : (
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
@@ -281,6 +336,8 @@ function Inventory(): React.JSX.Element {
           )}
         </div>
       </div>
+
+      {showImport && <ImportWizard onClose={() => setShowImport(false)} onImported={load} />}
     </>
   )
 }
