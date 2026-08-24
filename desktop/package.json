@@ -1,7 +1,7 @@
 {
-  "name": "desktop",
+  "name": "cache",
   "version": "1.0.0",
-  "description": "An Electron application with React and TypeScript",
+  "description": "Cache -- purchase and inventory tracking for resellers",
   "main": "./out/main/index.js",
   "author": "example.com",
   "homepage": "https://electron-vite.org",
