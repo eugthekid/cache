@@ -101,7 +101,8 @@ a {
 /* --- buttons ----------------------------------------------------------- */
 
 .btn-primary,
-.btn-ghost {
+.btn-ghost,
+.btn-danger {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -145,6 +146,21 @@ a {
   background: oklch(90% 0.02 250 / 0.12);
 }
 
+.btn-danger {
+  background: linear-gradient(135deg, oklch(66% 0.19 25), oklch(58% 0.2 12));
+  color: oklch(97% 0.01 30);
+  box-shadow: 0 6px 18px -4px oklch(60% 0.19 20 / 0.55);
+}
+.btn-danger:hover {
+  box-shadow: 0 8px 22px -3px oklch(58% 0.19 18 / 0.65);
+  transform: translateY(-1px);
+}
+.btn-danger:disabled {
+  opacity: 0.5;
+  cursor: default;
+  transform: none;
+}
+
 /* --- form controls ------------------------------------------------------ */
 
 .field-label {
@@ -178,6 +194,7 @@ a {
 
 select.select {
   appearance: none;
+  text-transform: capitalize;
 }
 
 /* --- status pills -------------------------------------------------------- */
