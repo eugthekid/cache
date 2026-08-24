@@ -28,6 +28,7 @@ FIELD_MAP = {
     "Size": "size",
     "Quantity": "quantity",
     "Total": "total",
+    "Price": "total",                 # Refract
     "ID": "checkout_id",
     "Delivery": "delivery",
     "Profile": "profile",
@@ -40,6 +41,7 @@ FIELD_MAP = {
     "Order URL": "order_url",
     "Is Preorder": "is_preorder",
     "Item": "product",                # HayhaAIO's item-name field
+    "Product": "product",             # Refract
 }
 
 # Field names that, when found on the embed, are a strong structural signal
@@ -88,6 +90,36 @@ def _extract_markdown_link(text: Optional[str]) -> tuple[Optional[str], Optional
         return text, None
     label = match.group(1).strip("*").strip()
     return label, match.group(2)
+
+
+_QTY_PREFIX_RE = re.compile(r"^\s*(\d+)\s*x\s+", re.IGNORECASE)
+_TRAILING_PRICE_RE = re.compile(r"\s*[-–—]\s*\$?[\d,]+\.?\d*\s*(?:USD|CAD|GBP|EUR)?\s*(?:\([^)]*\))?\s*$", re.IGNORECASE)
+
+
+def _clean_product_text(text: Optional[str]) -> Optional[str]:
+    """
+    Strip the packaging different bots wrap around the same product name,
+    so the SAME item reads identically no matter which bot reported it.
+    Two patterns, both seen in real data:
+
+      HiddenAIO : "1x Pokémon TCG: Foo (36 Packs) - 161.64 USD (OS)"
+      HayhaAIO  : "Pokémon TCG: Foo - $35.98"
+      wanted    : "Pokémon TCG: Foo (36 Packs)" / "Pokémon TCG: Foo"
+
+    The leading "Nx" is pure redundancy -- it always agreed with the
+    embed's own Quantity field across every order checked -- and the
+    trailing price is already captured as unit_price, so leaving either in
+    the name only creates phantom "different products" when grouping.
+
+    Deliberately conservative: only a price at the very END is removed, so
+    a name that legitimately contains a number or a dash ("Series 3",
+    "Scarlet & Violet-Prismatic") is untouched.
+    """
+    if not text:
+        return text
+    cleaned = _QTY_PREFIX_RE.sub("", text)
+    cleaned = _TRAILING_PRICE_RE.sub("", cleaned)
+    return cleaned.strip() or text.strip()
 
 
 def _parse_quantity(text: Optional[str]) -> Optional[int]:
@@ -252,24 +284,47 @@ def parse_message(message: Any) -> Optional[dict[str, Any]]:
     channel = getattr(message, "channel", None)
 
     raw_description = (embed.description or "").lstrip("• ").strip() or None
-    product_label, product_url = _extract_markdown_link(raw_description)
+    description_label, product_url = _extract_markdown_link(raw_description)
 
     fields: dict[str, Any] = {}
     extra_fields: dict[str, str] = {}
-    if product_url:
-        extra_fields["Product URL"] = product_url
     for field in embed.fields:
         value = _clean_value(field.value)
         column = FIELD_MAP.get(field.name)
         if column:
-            fields[column] = value
+            # Shikari markdown-links the PRODUCT NAME in the embed description
+            # ("[**Foo**](url)"), handled above via description_label/
+            # product_url. Refract does the same thing but inside a labeled
+            # field instead ("Product": "[Foo](url)", "Order #":
+            # "[#123](url)") -- so every mapped field gets the same
+            # link-stripping, not just the description, or a bot like that
+            # would store "[text](url)" verbatim in order_number/product.
+            label, url = _extract_markdown_link(value)
+            fields[column] = label
+            if column == "product" and url and not product_url:
+                product_url = url
         else:
             extra_fields[field.name] = value
 
-    product_text = fields.get("product") or product_label
-    total_text = fields.get("total") or _extract_price_from_text(product_text)
+    if product_url:
+        extra_fields["Product URL"] = product_url
+
+    raw_product = fields.get("product") or description_label
+    # Order matters: the price and the quantity both have to be read OUT of
+    # the raw text before _clean_product_text strips them from it.
+    total_text = fields.get("total") or _extract_price_from_text(raw_product)
     total_amount = _parse_money(total_text)
-    quantity = _parse_quantity(fields.get("quantity"))
+
+    if fields.get("quantity"):
+        quantity = _parse_quantity(fields.get("quantity"))
+    else:
+        # No Quantity field (some bots omit it) -- fall back to the "2x"
+        # prefix in the product text, which is the only quantity signal
+        # left. Defaults to 1 via _parse_quantity when neither exists.
+        prefix_match = _QTY_PREFIX_RE.match(raw_product or "")
+        quantity = int(prefix_match.group(1)) if prefix_match else 1
+
+    product_text = _clean_product_text(raw_product)
     # unit_price, not total: OrderCreate.unit_price * quantity is how spend
     # and per-unit cost_basis are computed downstream (see crud.create_order
     # and dashboard.py) -- dividing here, once, means every consumer of

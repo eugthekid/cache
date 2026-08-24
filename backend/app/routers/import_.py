@@ -6,8 +6,13 @@ a module name.)
 
 Spreadsheet import (.xlsx/.csv) as a distinct ingestion source. See
 docs/DATA-MODEL.md's "Spreadsheet import" section for the two-mode design
-(a purchase vs. stock already held) and why duplicates are matched on
-order_number specifically, not source+external_id like Discord ingestion.
+(a purchase vs. stock already held).
+
+Duplicates are matched on (order_number, product) -- a LINE key, not
+source+external_id like Discord ingestion, and deliberately not the order
+number alone. An order number identifies a cart, and one cart can contain
+several products, each arriving as its own row; keying on the order number
+by itself silently drops every line after the first. See _line_key().
 
 Two calls, same preview/commit split as backup.py, for the same reason:
 the column-mapping confirmation step needs real detected headers and a
@@ -129,6 +134,33 @@ def _read_rows(
     return headers, rows, []
 
 
+def _normalize_order_number(value: Any) -> Optional[str]:
+    """
+    Order numbers are the cross-source identity key (the same purchase seen
+    via Discord, email, and a spreadsheet should collapse to one order), so
+    they have to normalize to a byte-identical string from every source.
+
+    The specific trap this exists for: Excel stores a long digits-only
+    order number as a NUMBER, so openpyxl hands back 102003654824515.0 and
+    a naive str() yields "102003654824515.0" -- which never matches the
+    "102003654824515" the Discord bot recorded. Verified against a real
+    workbook: 34 of 34 Target rows failed to match before this, 34 of 34
+    match after.
+    """
+    if value is None:
+        return None
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    text = str(value).strip()
+    if not text:
+        return None
+    # Same trailing ".0" as above, but arriving as text (CSV, or a cell
+    # already stringified upstream).
+    if re.fullmatch(r"\d+\.0", text):
+        text = text[:-2]
+    return text or None
+
+
 def _extract(row: dict, mapping: dict[str, Optional[str]], field: str) -> Any:
     col = mapping.get(field)
     if not col:
@@ -197,7 +229,7 @@ def _evaluate_row(
     row: dict,
     mapping: dict[str, Optional[str]],
     mode: str,
-    existing_order_numbers: set[str],
+    existing_line_keys: set[tuple[str, str]],
 ) -> dict:
     """
     The single source of truth for "is this row importable, and as what."
@@ -223,7 +255,7 @@ def _evaluate_row(
         status_raw = _extract(row, mapping, "status")
         status = _ORDER_STATUS_MAP.get(str(status_raw).strip().lower()) if status_raw else "success"
         order_number = _extract(row, mapping, "order_number")
-        order_number = str(order_number).strip() if order_number else None
+        order_number = _normalize_order_number(order_number)
 
         if price is None:
             reason = "missing price" if price_raw is None else f"can't read price '{price_raw}'"
@@ -239,7 +271,8 @@ def _evaluate_row(
                 "fields": {"product": product, "price": price},
             }
 
-        duplicate = bool(order_number) and order_number in existing_order_numbers
+        line_key = _line_key(order_number, product)
+        duplicate = line_key is not None and line_key in existing_line_keys
         fields = {
             "raw_product_text": product,
             "site": _extract(row, mapping, "site"),
@@ -276,13 +309,42 @@ def _evaluate_row(
     return {"ok": True, "reason": None, "duplicate": False, "fields": fields}
 
 
-def _existing_order_numbers(db: Session) -> set[str]:
+def _line_key(order_number: Optional[str], product: Any) -> Optional[tuple[str, str]]:
+    """
+    Dedup identity for ONE LINE of an order, not the order as a whole.
+
+    This distinction is the whole point: an order number is NOT unique.
+    A single cart containing three different products posts three separate
+    checkout notifications, all carrying the same order number -- verified
+    in real data, where 50 order numbers span multiple line items. Keying
+    dedup on the order number alone therefore discards every line after the
+    first (80 legitimate rows in the user's own dataset).
+
+    Pairing it with the product name identifies the line. Product text is
+    casefolded and whitespace-collapsed so trivial formatting differences
+    between sources don't read as a different line.
+    """
+    if not order_number or not product:
+        return None
+    normalized = re.sub(r"\s+", " ", str(product)).strip().lower()
+    if not normalized:
+        return None
+    return (order_number, normalized)
+
+
+def _existing_line_keys(db: Session) -> set[tuple[str, str]]:
     rows = (
-        db.query(models.Order.order_number)
+        db.query(models.Order.order_number, models.Order.raw_product_text)
+        .filter(models.Order.deleted_at.is_(None))
         .filter(models.Order.order_number.isnot(None))
         .all()
     )
-    return {r[0] for r in rows if r[0]}
+    keys = set()
+    for order_number, product in rows:
+        key = _line_key(order_number, product)
+        if key:
+            keys.add(key)
+    return keys
 
 
 def _evaluate_all_rows(
@@ -290,22 +352,25 @@ def _evaluate_all_rows(
 ) -> list[dict]:
     """
     Runs every row through _evaluate_row, with ONE piece of state threaded
-    across the whole file: order numbers seen so far. That's what makes
-    "two rows in this same spreadsheet share an order number" correctly
-    flag the second one as a duplicate too, not just a number that was
-    already in the database before the import started. preview and commit
-    both call this exact function so they can never disagree about which
-    rows are ready, duplicate, or need attention.
+    across the whole file: the line keys seen so far. That's what makes
+    "two rows in this same spreadsheet are the same line" correctly flag
+    the second one as a duplicate too, not just one already in the database
+    before the import started. preview and commit both call this exact
+    function so they can never disagree about which rows are ready,
+    duplicate, or need attention.
     """
-    seen_order_numbers = _existing_order_numbers(db)
+    seen_line_keys = _existing_line_keys(db)
     results = []
     for row in rows:
-        result = _evaluate_row(row, mapping, mode, seen_order_numbers)
+        result = _evaluate_row(row, mapping, mode, seen_line_keys)
         results.append(result)
         if result["ok"] and not result["duplicate"]:
-            order_number = result["fields"].get("order_number")
-            if order_number:
-                seen_order_numbers.add(order_number)
+            key = _line_key(
+                result["fields"].get("order_number"),
+                result["fields"].get("raw_product_text"),
+            )
+            if key:
+                seen_line_keys.add(key)
     return results
 
 
