@@ -1,0 +1,226 @@
+import { useEffect, useState } from 'react'
+import { api, type ChannelScope, type DiscordStatus, type SyncStatus } from '../api/client'
+
+interface DiscordConnectProps {
+  status: DiscordStatus
+  onUpdated: (status: DiscordStatus) => void
+}
+
+/** The "Connect Discord" form in Settings -- writes bot/.env through the
+ * backend instead of the user hand-editing it. Doesn't start or manage the
+ * bot process itself; see backend/app/routers/discord.py's docstring for
+ * why (closing Cache shouldn't stop checkouts from being logged). */
+function DiscordConnect({ status, onUpdated }: DiscordConnectProps): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [justSaved, setJustSaved] = useState(false)
+  const [token, setToken] = useState('')
+  const [guildId, setGuildId] = useState(status.guild_id ?? '')
+  const [scope, setScope] = useState<ChannelScope>(status.channel_scope ?? 'all')
+  const [channelIds, setChannelIds] = useState(status.channel_ids ?? '')
+  const [profileFilter, setProfileFilter] = useState(status.profile_filter ?? '')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [sync, setSync] = useState<SyncStatus | null>(null)
+  const [resyncing, setResyncing] = useState(false)
+
+  useEffect(() => {
+    api.sync.status().then(setSync).catch(() => setSync(null))
+  }, [])
+
+  async function requestResync(): Promise<void> {
+    setResyncing(true)
+    try {
+      setSync(await api.sync.request(true))
+    } finally {
+      setResyncing(false)
+    }
+  }
+
+  /** Most recent successful channel scan, or null if nothing has synced. */
+  function lastSyncedLabel(): string {
+    const stamps = (sync?.sources ?? [])
+      .map((s) => s.last_synced_at)
+      .filter((s): s is string => s != null)
+      .sort()
+    if (stamps.length === 0) return 'never synced'
+    return `last synced ${new Date(stamps[stamps.length - 1]).toLocaleString()}`
+  }
+
+  function startEdit(): void {
+    setToken('')
+    setGuildId(status.guild_id ?? '')
+    setScope(status.channel_scope ?? 'all')
+    setChannelIds(status.channel_ids ?? '')
+    setProfileFilter(status.profile_filter ?? '')
+    setError(null)
+    setJustSaved(false)
+    setOpen(true)
+  }
+
+  async function save(): Promise<void> {
+    setSaving(true)
+    setError(null)
+    try {
+      const updated = await api.discord.configure({
+        token: token || undefined,
+        guild_id: guildId,
+        channel_scope: scope,
+        channel_ids: scope === 'specific' ? channelIds : undefined,
+        profile_filter: profileFilter || undefined
+      })
+      onUpdated(updated)
+      setJustSaved(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!open) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 20,
+          padding: '16px 0',
+          borderTop: '1px solid var(--divider)'
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 500 }}>Discord bot</div>
+          <div className="num" style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 2 }}>
+            {status.configured
+              ? `Server ${status.guild_id} · ${status.channel_scope === 'all' ? 'all channels' : `${status.channel_ids?.split(',').length ?? 0} channel(s)`}${status.profile_filter ? ` · filtering: ${status.profile_filter}` : ''}`
+              : 'Not connected yet'}
+          </div>
+          {status.configured && (
+            <div className="num" style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 4 }}>
+              {sync?.pending ? 'Resync queued — the bot picks it up within ~20s' : lastSyncedLabel()}
+            </div>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span className={`pill ${status.configured ? 'pill-success' : 'pill-neutral'}`}>
+            <span className="dot" />
+            {status.configured ? 'configured' : 'not connected'}
+          </span>
+          {status.configured && (
+            <button
+              className="btn-ghost"
+              style={{ padding: '8px 14px', fontSize: 12.5 }}
+              onClick={requestResync}
+              disabled={resyncing || sync?.pending}
+              title="Re-read the whole channel history. Anything you deleted in Cache stays deleted."
+            >
+              {sync?.pending ? 'Queued…' : resyncing ? 'Requesting…' : 'Resync'}
+            </button>
+          )}
+          <button className="btn-ghost" style={{ padding: '8px 14px', fontSize: 12.5 }} onClick={startEdit}>
+            {status.configured ? 'Edit' : 'Connect'}
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ borderTop: '1px solid var(--divider)', padding: '16px 0', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ fontSize: 13, fontWeight: 500 }}>Connect Discord</div>
+
+      {justSaved ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>
+            Saved. The bot itself runs as its own process, separate from Cache, so it keeps logging checkouts even
+            when Cache is closed — start it with:
+          </div>
+          <div className="num" style={{ fontSize: 12, padding: '10px 12px', background: 'var(--field-bg)', border: '1px solid var(--field-border)', borderRadius: 8 }}>
+            cd bot && ./run.sh
+          </div>
+          <button className="btn-ghost" style={{ padding: '8px 14px', fontSize: 12.5, alignSelf: 'flex-start' }} onClick={() => setOpen(false)}>
+            Done
+          </button>
+        </div>
+      ) : (
+        <>
+          <ConnectField label="Bot token" hint="Discord Developer Portal → your app → Bot → Reset Token">
+            <input
+              className="field-input"
+              type="password"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              placeholder={status.configured ? 'Leave blank to keep the current token' : 'Paste your bot token'}
+            />
+          </ConnectField>
+
+          <ConnectField label="Server (guild) ID" hint="Enable Developer Mode, then right-click your server icon → Copy Server ID">
+            <input className="field-input num" value={guildId} onChange={(e) => setGuildId(e.target.value)} placeholder="000000000000000000" />
+          </ConnectField>
+
+          <ConnectField label="Channels to watch" hint={null}>
+            <div style={{ display: 'flex', gap: 6, background: 'var(--field-bg)', border: '1px solid var(--field-border)', borderRadius: 9, padding: 3 }}>
+              {(['all', 'specific'] as ChannelScope[]).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setScope(s)}
+                  style={{
+                    flex: 1,
+                    padding: 8,
+                    borderRadius: 7,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    border: 'none',
+                    cursor: 'pointer',
+                    background: scope === s ? 'var(--accent-gradient)' : 'transparent',
+                    color: scope === s ? 'oklch(14% 0.01 255)' : 'var(--text-secondary)'
+                  }}
+                >
+                  {s === 'all' ? 'All channels' : 'Specific channels'}
+                </button>
+              ))}
+            </div>
+          </ConnectField>
+
+          {scope === 'specific' && (
+            <ConnectField label="Channel IDs" hint="Right-click a channel → Copy Channel ID. Comma-separated for more than one.">
+              <input className="field-input num" value={channelIds} onChange={(e) => setChannelIds(e.target.value)} placeholder="111111111, 222222222" />
+            </ConnectField>
+          )}
+
+          <ConnectField label="Only my checkouts (optional)" hint="Case-insensitive, matches part of the profile name — e.g. 'eugene' matches 'eugene1'">
+            <input className="field-input" value={profileFilter} onChange={(e) => setProfileFilter(e.target.value)} placeholder="Leave blank to log everyone's checkouts" />
+          </ConnectField>
+
+          {error && <div style={{ fontSize: 12, color: 'var(--status-failed)' }}>{error}</div>}
+
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button className="btn-primary" style={{ flex: 1 }} onClick={save} disabled={saving || !guildId || (scope === 'specific' && !channelIds)}>
+              {saving ? 'SAVING…' : 'SAVE'}
+            </button>
+            <button className="btn-ghost" style={{ flex: 1 }} onClick={() => setOpen(false)} disabled={saving}>
+              CANCEL
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function ConnectField({ label, hint, children }: { label: string; hint: string | null; children: React.ReactNode }): React.JSX.Element {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+      <div className="field-label">{label}</div>
+      {children}
+      {hint && (
+        <div className="num" style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>
+          {hint}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default DiscordConnect

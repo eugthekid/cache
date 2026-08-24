@@ -69,3 +69,26 @@ CHANGELOG_CHANNEL_ID: Optional[int] = (
 # parsed checkout is POSTed here instead of written to a local SQLite file
 # the way discord-checkout-tracker's database.py did.
 API_BASE_URL: str = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
+
+# --- New for inventory-tracker: an ingestion-time profile filter. Every
+# checkout already carries a `profile` field (parsed in parser.py from the
+# embed's "Profile"/"Profile Name" field) -- this is the first thing that
+# actually reads it before a message is stored, rather than just recording
+# it. Unset/empty means "keep everything" (the old, only) behavior, so this
+# is opt-in and never breaks an existing setup.
+_raw_profile_filter = (os.getenv("PROFILE_FILTER") or "").strip()
+PROFILE_FILTER: list[str] = [p.strip().lower() for p in _raw_profile_filter.split(",") if p.strip()]
+
+
+def matches_profile_filter(profile: Optional[str]) -> bool:
+    """Case-insensitive substring match, same convention discord-checkout-
+    tracker's own /export profile filter used -- 'eugene' matches
+    'eugene1', 'eugene_alt', etc, not just an exact profile name. A
+    checkout with no profile field at all is dropped once a filter is
+    configured, since there's no way to tell whose it is."""
+    if not PROFILE_FILTER:
+        return True
+    if not profile:
+        return False
+    profile_lower = profile.lower()
+    return any(term in profile_lower for term in PROFILE_FILTER)
