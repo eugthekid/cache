@@ -1,10 +1,10 @@
 """
 models.py
 ---------
-The SQLAlchemy ORM models -- this is the v1 data model we sketched together:
-User -> Source -> Order -> InventoryItem. `products` and `market_prices` are
-deliberately NOT here yet; product_id columns will be added via a later
-Alembic migration once that phase starts, without touching these tables.
+The SQLAlchemy ORM models. Core shape: User -> Source -> Order ->
+InventoryItem, with Product/ProductAlias sitting alongside as the identity
+layer that answers "are these two rows the same thing?" across sources.
+`market_prices` is still deliberately absent -- that's v2.
 
 WHY UUID PRIMARY KEYS (not auto-incrementing integers): if this ever becomes
 a hosted product serving multiple users, IDs generated on different machines
@@ -103,9 +103,11 @@ class Order(Base):
     status: Mapped[str]
     failure_reason: Mapped[str | None] = mapped_column(default=None)
 
-    # Product matching (phase 2) isn't built yet -- this free-text field is
-    # what we actually display/search on on until a `product_id` FK exists.
+    # The raw name exactly as the source reported it -- never rewritten, so
+    # the original is always recoverable and new alias rules can be re-run
+    # over history. `product_id` is the resolved identity (see Product).
     raw_product_text: Mapped[str | None] = mapped_column(default=None)
+    product_id: Mapped[str | None] = mapped_column(ForeignKey("products.id"), default=None)
 
     profile: Mapped[str | None] = mapped_column(default=None)
     site: Mapped[str | None] = mapped_column(default=None)
@@ -145,6 +147,14 @@ class Order(Base):
     purchased_at: Mapped[datetime | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
+    # SOFT delete, not a real DELETE -- and the reason is specific: Discord
+    # is the durable source of truth, and the bot re-walks a channel's whole
+    # history on every restart. A hard-deleted order has no (source_id,
+    # external_id) row left for POST /orders to dedup against, so the very
+    # next backfill silently RESURRECTS it. Keeping the row (hidden from
+    # every read path) is what makes "I deleted this" survive a resync.
+    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
+
     # Full backup of the original source payload, same purpose as
     # discord-checkout-tracker's raw_json: nothing is ever silently dropped.
     raw_json: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -183,6 +193,11 @@ class InventoryItem(Base):
     # IS, which made that import mode useless -- found while building it.
     product_text: Mapped[str | None] = mapped_column(default=None)
 
+    # Set for standalone units (order_id NULL). A unit that HAS an order
+    # inherits that order's product_id instead of duplicating it, so there
+    # is exactly one place to fix if a product is ever re-identified.
+    product_id: Mapped[str | None] = mapped_column(ForeignKey("products.id"), default=None)
+
     # 'in_hand' | 'listed' | 'sold' | 'returned' | 'lost'
     status: Mapped[str] = mapped_column(default="in_hand")
 
@@ -193,11 +208,96 @@ class InventoryItem(Base):
     sold_at: Mapped[datetime | None] = mapped_column(default=None)
     sold_platform: Mapped[str | None] = mapped_column(default=None)
 
+    # Selling and actually GETTING PAID are different events, often weeks
+    # apart on consignment/marketplace payouts -- the user's own ledger has
+    # tracked them as separate columns for years. status='sold' with this
+    # still NULL is the state that matters: sold, money not in hand yet.
+    # A timestamp rather than a boolean so "how long am I waiting?" is
+    # answerable; the boolean is just `money_received_at is not None`.
+    money_received_at: Mapped[datetime | None] = mapped_column(default=None)
+
     notes: Mapped[str | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
+    # See Order.deleted_at -- same soft-delete reasoning. Also set when the
+    # parent order is deleted, so a resurrected-then-hidden order can't leave
+    # visible orphan units behind.
+    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
+
     user: Mapped["User"] = relationship(back_populates="inventory_items")
     order: Mapped["Order | None"] = relationship(back_populates="inventory_items")
+
+
+class Product(Base):
+    """
+    The canonical identity of a thing you buy and sell -- what makes "I hold
+    12 of these" answerable at all.
+
+    This exists because the SAME physical product arrives under wildly
+    different names depending on where it came from. Measured across real
+    data: a spreadsheet said "Pokémon TCG: Pitch Black PKC ETB" while the
+    Discord bot said "1x Pokémon TCG: Mega Evolution-Pitch Black Pokémon
+    Center Elite Trainer Box - 59.99 USD (OS)". Normalizing strings alone
+    matched ZERO of 28 spreadsheet names against 52 Discord names, so
+    string cleanup can never be the whole answer -- hence a real identity
+    row that many raw names point AT, via ProductAlias.
+
+    `normalized_key` is the deterministic fingerprint (see products.py's
+    normalize()); it's what a never-before-seen raw name is first looked up
+    by, before falling back to creating a new product.
+    """
+    __tablename__ = "products"
+    __table_args__ = (
+        UniqueConstraint("user_id", "normalized_key", name="uq_products_user_key"),
+    )
+
+    id: Mapped[str] = mapped_column(primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+
+    # What the UI displays. Starts as the first raw name seen, and is
+    # editable -- the user renaming a product must not change its identity,
+    # which is why this is separate from normalized_key.
+    canonical_name: Mapped[str]
+    normalized_key: Mapped[str]
+
+    category: Mapped[str | None] = mapped_column(default=None)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+    aliases: Mapped[list["ProductAlias"]] = relationship(back_populates="product")
+
+
+class ProductAlias(Base):
+    """
+    One raw product string -> one Product. Every distinct name any source
+    has ever used gets a row here, so the mapping is a stored FACT rather
+    than something re-derived (and re-guessed) on every read.
+
+    Aliases are learned three ways, in descending confidence:
+      1. exact normalized-key match (automatic, deterministic)
+      2. two sources sharing an ORDER NUMBER but disagreeing on the product
+         name -- a confirmed pairing, since the same order is the same
+         purchase. This is how the hard cases get solved: 21 real alias
+         pairs were recovered from the user's own data this way, including
+         ones no normalizer could reach.
+      3. the user merging two products by hand
+    `source` records which, so a bad automatic guess can be found later.
+    """
+    __tablename__ = "product_aliases"
+    __table_args__ = (
+        UniqueConstraint("user_id", "normalized_key", name="uq_alias_user_key"),
+    )
+
+    id: Mapped[str] = mapped_column(primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    product_id: Mapped[str] = mapped_column(ForeignKey("products.id"))
+
+    raw_text: Mapped[str]
+    normalized_key: Mapped[str]
+    # 'exact' | 'order_number' | 'manual'
+    source: Mapped[str] = mapped_column(default="exact")
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+    product: Mapped["Product"] = relationship(back_populates="aliases")
 
 
 class AppSetting(Base):

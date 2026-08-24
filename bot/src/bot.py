@@ -1,11 +1,19 @@
 """
 bot.py
 ------
-The Discord bot. Two jobs, same as discord-checkout-tracker's:
+The Discord bot. Three jobs now:
 
-  1. BACKFILL -- on startup, walks each watched channel's full history and
-                 POSTs every checkout-shaped embed found to the backend.
+  1. BACKFILL -- on startup, scans each watched channel and POSTs every
+                 checkout-shaped embed to the backend. INCREMENTAL by
+                 default (only messages newer than that channel's
+                 last_synced_at), which keeps startup fast once a server
+                 has real history behind it; the first run has no
+                 high-water mark and so is naturally a full walk.
   2. LIVE     -- stays connected and POSTs each new one as it's posted.
+  3. RESYNC   -- polls the backend for a Resync requested from the Cache
+                 desktop app, and re-scans on demand (full or incremental).
+                 Polling, not a callback: this process has no inbound
+                 address, so the bot has to ask. See backend routers/sync.py.
 
 Dropped from discord-checkout-tracker: the /export and /stats slash
 commands. inventory-tracker has its own Orders and Dashboard screens
@@ -21,6 +29,7 @@ message-by-message once every POST starts throwing connection errors.
 import asyncio
 import os
 import sys
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -36,17 +45,41 @@ intents.guilds = True
 
 
 class CheckoutBot(discord.Client):
+    # How often to check whether the desktop app asked for a resync.
+    RESYNC_POLL_SECONDS = 20
+
     def __init__(self, api: ApiClient) -> None:
         super().__init__(intents=intents)
         self.api = api
         self._backfilled = False
 
     async def on_ready(self) -> None:
-        print(f"Logged in as {self.user}. Reading channel history...")
+        print(f"Logged in as {self.user}.")
         if self._backfilled:
             return
         self._backfilled = True
-        await self.backfill_history()
+        # Incremental on startup: only messages newer than each channel's
+        # last_synced_at. A first run (nothing synced yet) is naturally a
+        # full walk, because there's no high-water mark to start from.
+        await self.backfill_history(full=False)
+        self.loop.create_task(self._watch_for_resync())
+
+    async def _watch_for_resync(self) -> None:
+        """Polls the backend for a Resync requested from the desktop app.
+        Polling rather than the app calling us: the bot is a separate
+        process with no inbound address, so this is the only direction that
+        works without asking the user to open a port."""
+        while not self.is_closed():
+            await asyncio.sleep(self.RESYNC_POLL_SECONDS)
+            try:
+                claimed, full = await self.api.claim_sync_request()
+            except Exception as exc:  # never let a poll kill the bot
+                print(f"(resync poll failed: {exc})")
+                continue
+            if claimed:
+                kind = "full" if full else "incremental"
+                print(f"Resync requested from Cache ({kind}). Scanning...")
+                await self.backfill_history(full=full)
 
     def _channels_to_scan(self, guild: discord.Guild) -> list[discord.abc.Messageable]:
         if config.SCAN_ALL_CHANNELS:
@@ -60,7 +93,7 @@ class CheckoutBot(discord.Client):
                 channels.append(ch)
         return channels
 
-    async def backfill_history(self) -> None:
+    async def backfill_history(self, full: bool = True) -> None:
         guild = self.get_guild(config.GUILD_ID)
         if guild is None:
             print(f"Could not find server {config.GUILD_ID}. Is the bot in it?")
@@ -68,27 +101,48 @@ class CheckoutBot(discord.Client):
 
         channels = self._channels_to_scan(guild)
         scope = "all channels" if config.SCAN_ALL_CHANNELS else f"{len(channels)} channel(s)"
-        print(f"Scanning {scope} in {guild.name}...")
+        mode = "full history" if full else "new messages only"
+        print(f"Scanning {scope} in {guild.name} ({mode})...")
 
         total_sent = 0
+        total_skipped = 0
         for channel in channels:
             source_id = await self.api.get_or_create_source(channel.id, channel.name, guild.id)
+
+            after = None
+            if not full:
+                last_synced = await self.api.get_source_last_synced(source_id)
+                if last_synced:
+                    # discord.py wants a datetime for `after`; an aware one,
+                    # since Discord timestamps are UTC.
+                    parsed = datetime.fromisoformat(last_synced)
+                    after = parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
             try:
                 # oldest_first=True, limit=None: walk the whole channel from
                 # the start, same as discord-checkout-tracker. Dedup is the
                 # API's job now (POST /orders is idempotent on
                 # source_id+external_id), so re-running this is always safe.
-                async for message in channel.history(limit=None, oldest_first=True):
+                async for message in channel.history(limit=None, oldest_first=True, after=after):
                     record = checkout_parser.parse_message(message)
-                    if record:
-                        await self.api.post_order(record, source_id)
-                        total_sent += 1
+                    if not record:
+                        continue
+                    if not config.matches_profile_filter(record.get("profile")):
+                        total_skipped += 1
+                        continue
+                    await self.api.post_order(record, source_id)
+                    total_sent += 1
             except discord.Forbidden:
                 print(f"  (no access to #{channel.name}, skipping)")
             except discord.HTTPException as exc:
                 print(f"  (error reading #{channel.name}: {exc}, skipping)")
+            else:
+                # Only advance the high-water mark when the channel was read
+                # without error -- otherwise a transient failure would make
+                # the next incremental run skip the messages we just missed.
+                await self.api.mark_source_synced(source_id)
 
-        print(f"Backfill complete: {total_sent} checkouts sent to the backend.")
+        skipped_note = f" ({total_skipped} skipped -- didn't match PROFILE_FILTER)" if total_skipped else ""
+        print(f"Backfill complete: {total_sent} checkouts sent to the backend{skipped_note}.")
         print("Now listening for new checkouts.")
 
     async def on_message(self, message: discord.Message) -> None:
@@ -98,6 +152,8 @@ class CheckoutBot(discord.Client):
             return
         record = checkout_parser.parse_message(message)
         if not record:
+            return
+        if not config.matches_profile_filter(record.get("profile")):
             return
 
         source_id = await self.api.get_or_create_source(

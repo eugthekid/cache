@@ -4,11 +4,14 @@ import StatusPill from '../components/StatusPill'
 import ImportWizard from '../components/ImportWizard'
 import EmptyState from '../components/EmptyState'
 import ErrorState from '../components/ErrorState'
+import BulkActionBar from '../components/BulkActionBar'
 import { Skel, TableSkeleton } from '../components/Skeleton'
 import type { Screen } from '../components/NavRail'
 
 const ORDER_STATUSES: OrderStatus[] = ['success', 'failed', 'cancelled', 'pending']
 const SHIPPING_STATUSES: ShippingStatus[] = ['not_shipped', 'label_created', 'in_transit', 'delivered', 'exception']
+
+type PanelMode = 'closed' | 'new' | 'edit'
 
 type DraftOrder = {
   raw_product_text: string
@@ -79,13 +82,17 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [panelMode, setPanelMode] = useState<PanelMode>('closed')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [draft, setDraft] = useState<DraftOrder>(BLANK_DRAFT)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const [showImport, setShowImport] = useState(false)
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set())
 
-  const isNew = selectedId === null
+  const isNew = panelMode === 'new'
+  const panelOpen = panelMode !== 'closed'
 
   useEffect(() => {
     load()
@@ -108,16 +115,36 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
     setSelectedId(order.id)
     setDraft(orderToDraft(order))
     setSaveError(null)
+    setPanelMode('edit')
   }
 
   function startNew(): void {
     setSelectedId(null)
     setDraft(BLANK_DRAFT)
     setSaveError(null)
+    setPanelMode('new')
+  }
+
+  function closePanel(): void {
+    setPanelMode('closed')
+    setSelectedId(null)
   }
 
   function updateDraft<K extends keyof DraftOrder>(key: K, value: DraftOrder[K]): void {
     setDraft((prev) => ({ ...prev, [key]: value }))
+  }
+
+  function toggleChecked(id: string): void {
+    setCheckedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function toggleAllChecked(): void {
+    setCheckedIds((prev) => (prev.size === orders.length ? new Set() : new Set(orders.map((o) => o.id))))
   }
 
   async function save(): Promise<void> {
@@ -160,6 +187,41 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
     } finally {
       setSaving(false)
     }
+  }
+
+  async function deleteCurrent(): Promise<void> {
+    if (!selectedId) return
+    if (!window.confirm('Delete this order? Any inventory it created goes too, and a Discord resync won’t bring it back.')) return
+    setDeleting(true)
+    try {
+      await api.orders.delete(selectedId)
+      setOrders((prev) => prev.filter((o) => o.id !== selectedId))
+      setCheckedIds((prev) => {
+        const next = new Set(prev)
+        next.delete(selectedId)
+        return next
+      })
+      closePanel()
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Failed to delete')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  async function bulkSetStatus(status: OrderStatus): Promise<void> {
+    const ids = Array.from(checkedIds)
+    await api.orders.bulkSetStatus(ids, status)
+    setOrders((prev) => prev.map((o) => (checkedIds.has(o.id) ? { ...o, status } : o)))
+    setCheckedIds(new Set())
+  }
+
+  async function bulkDelete(): Promise<void> {
+    const ids = Array.from(checkedIds)
+    await api.orders.bulkDelete(ids)
+    setOrders((prev) => prev.filter((o) => !checkedIds.has(o.id)))
+    if (selectedId && checkedIds.has(selectedId)) closePanel()
+    setCheckedIds(new Set())
   }
 
   const showFailureReason = draft.status === 'failed' || draft.status === 'cancelled'
@@ -212,13 +274,31 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
 
       {showImport && <ImportWizard onClose={() => setShowImport(false)} onImported={load} />}
 
-      <div style={{ position: 'relative', flex: 1, display: 'grid', gridTemplateColumns: '1.55fr 1fr', gap: 16, minHeight: 0 }}>
-        <div className="card" style={{ padding: '8px 16px 14px', overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
+      {checkedIds.size > 0 && (
+        <BulkActionBar
+          count={checkedIds.size}
+          statusOptions={ORDER_STATUSES}
+          onSetStatus={bulkSetStatus}
+          onDelete={bulkDelete}
+          onClear={() => setCheckedIds(new Set())}
+          noun="order"
+        />
+      )}
+
+      <div
+        style={
+          panelOpen
+            ? { position: 'relative', flex: 1, display: 'grid', gridTemplateColumns: '1.55fr 1fr', gap: 16, minHeight: 0 }
+            : { position: 'relative', flex: 1, minHeight: 0 }
+        }
+      >
+        <div className="card" style={{ padding: '8px 16px 14px', overflow: 'auto', display: 'flex', flexDirection: 'column', height: '100%' }}>
           {orders.length === 0 ? (
             <>
               <table style={{ width: '100%', borderCollapse: 'collapse', opacity: 0.4 }}>
                 <thead>
                   <tr>
+                    <th style={{ paddingTop: 16, width: 32 }} />
                     <th style={{ paddingTop: 16 }}>Product</th>
                     <th style={{ paddingTop: 16 }}>Site</th>
                     <th style={{ paddingTop: 16 }}>Price</th>
@@ -258,6 +338,9 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
+                  <th style={{ paddingTop: 16, width: 32 }}>
+                    <input type="checkbox" checked={checkedIds.size === orders.length} onChange={toggleAllChecked} />
+                  </th>
                   <th style={{ paddingTop: 16 }}>Product</th>
                   <th style={{ paddingTop: 16 }}>Site</th>
                   <th style={{ paddingTop: 16 }}>Price</th>
@@ -277,6 +360,9 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
                       background: order.id === selectedId ? 'linear-gradient(90deg, oklch(29% 0.06 215), oklch(27% 0.06 292 / 0.6))' : undefined
                     }}
                   >
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <input type="checkbox" checked={checkedIds.has(order.id)} onChange={() => toggleChecked(order.id)} />
+                    </td>
                     <td style={{ fontWeight: 500 }}>{order.raw_product_text ?? '—'}</td>
                     <td style={{ color: 'var(--text-secondary)' }}>{order.site ?? '—'}</td>
                     <td className="num">{order.unit_price != null ? `$${order.unit_price.toFixed(2)}` : '—'}</td>
@@ -298,95 +384,107 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
           )}
         </div>
 
-        <div className="card" style={{ padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 14, overflow: 'auto' }}>
-          <div style={{ fontSize: 13.5, fontWeight: 600 }}>{isNew ? 'New order' : 'Edit order'}</div>
-
-          <Field label="Product">
-            <input className="field-input" value={draft.raw_product_text} onChange={(e) => updateDraft('raw_product_text', e.target.value)} />
-          </Field>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Field label="Site">
-              <input className="field-input" value={draft.site} onChange={(e) => updateDraft('site', e.target.value)} />
-            </Field>
-            <Field label="Profile">
-              <input className="field-input" value={draft.profile} onChange={(e) => updateDraft('profile', e.target.value)} />
-            </Field>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Field label="Category">
-              <input className="field-input" value={draft.category} onChange={(e) => updateDraft('category', e.target.value)} placeholder="e.g. Sneakers" />
-            </Field>
-            <Field label="Order number">
-              <input className="field-input" value={draft.order_number} onChange={(e) => updateDraft('order_number', e.target.value)} />
-            </Field>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Field label="Price">
-              <input className="field-input num" type="number" step="0.01" value={draft.unit_price} onChange={(e) => updateDraft('unit_price', e.target.value)} />
-            </Field>
-            <Field label="Qty">
-              <input className="field-input num" type="number" min="1" value={draft.quantity} onChange={(e) => updateDraft('quantity', e.target.value)} />
-            </Field>
-            <Field label="Date">
-              <input className="field-input num" type="date" value={draft.purchased_at} onChange={(e) => updateDraft('purchased_at', e.target.value)} />
-            </Field>
-          </div>
-
-          <Field label="Order status">
-            <select className="select" value={draft.status} onChange={(e) => updateDraft('status', e.target.value as OrderStatus)}>
-              {ORDER_STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </Field>
-
-          {showFailureReason && (
-            <Field label="Failure reason">
-              <input className="field-input" value={draft.failure_reason} onChange={(e) => updateDraft('failure_reason', e.target.value)} />
-            </Field>
-          )}
-
-          {showShipping && (
-            <div style={{ borderTop: '1px solid var(--divider)', paddingTop: 13, display: 'flex', flexDirection: 'column', gap: 13 }}>
-              <Field label="Shipping status">
-                <select className="select" value={draft.shipping_status} onChange={(e) => updateDraft('shipping_status', e.target.value as ShippingStatus)}>
-                  {SHIPPING_STATUSES.map((s) => (
-                    <option key={s} value={s}>
-                      {s.replace(/_/g, ' ')}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Tracking number">
-                <input className="field-input num" value={draft.tracking_number} onChange={(e) => updateDraft('tracking_number', e.target.value)} />
-              </Field>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12 }}>
-                <Field label="Ship-to label">
-                  <input className="field-input" value={draft.ship_to_label} onChange={(e) => updateDraft('ship_to_label', e.target.value)} placeholder="Home" />
-                </Field>
-                <Field label="Ship-to address">
-                  <input className="field-input" value={draft.ship_to_address} onChange={(e) => updateDraft('ship_to_address', e.target.value)} />
-                </Field>
-              </div>
+        {panelOpen && (
+          <div className="card" style={{ padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 14, overflow: 'auto' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ fontSize: 13.5, fontWeight: 600 }}>{isNew ? 'New order' : 'Edit order'}</div>
+              <button className="link-action" onClick={closePanel} aria-label="Close">
+                Close
+              </button>
             </div>
-          )}
 
-          {saveError && <div style={{ fontSize: 12, color: 'var(--status-failed)' }}>{saveError}</div>}
+            <Field label="Product">
+              <input className="field-input" value={draft.raw_product_text} onChange={(e) => updateDraft('raw_product_text', e.target.value)} />
+            </Field>
 
-          <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
-            <button className="btn-primary" style={{ flex: 1 }} onClick={save} disabled={saving || !draft.raw_product_text}>
-              {saving ? 'SAVING…' : 'SAVE CHANGES'}
-            </button>
-            <button className="btn-ghost" style={{ flex: 1 }} onClick={startNew} disabled={saving}>
-              CANCEL
-            </button>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <Field label="Site">
+                <input className="field-input" value={draft.site} onChange={(e) => updateDraft('site', e.target.value)} />
+              </Field>
+              <Field label="Profile">
+                <input className="field-input" value={draft.profile} onChange={(e) => updateDraft('profile', e.target.value)} />
+              </Field>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <Field label="Category">
+                <input className="field-input" value={draft.category} onChange={(e) => updateDraft('category', e.target.value)} placeholder="e.g. Sneakers" />
+              </Field>
+              <Field label="Order number">
+                <input className="field-input" value={draft.order_number} onChange={(e) => updateDraft('order_number', e.target.value)} />
+              </Field>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+              <Field label="Price">
+                <input className="field-input num" type="number" step="0.01" value={draft.unit_price} onChange={(e) => updateDraft('unit_price', e.target.value)} />
+              </Field>
+              <Field label="Qty">
+                <input className="field-input num" type="number" min="1" value={draft.quantity} onChange={(e) => updateDraft('quantity', e.target.value)} />
+              </Field>
+              <Field label="Date">
+                <input className="field-input num" type="date" value={draft.purchased_at} onChange={(e) => updateDraft('purchased_at', e.target.value)} />
+              </Field>
+            </div>
+
+            <Field label="Order status">
+              <select className="select" value={draft.status} onChange={(e) => updateDraft('status', e.target.value as OrderStatus)}>
+                {ORDER_STATUSES.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            {showFailureReason && (
+              <Field label="Failure reason">
+                <input className="field-input" value={draft.failure_reason} onChange={(e) => updateDraft('failure_reason', e.target.value)} />
+              </Field>
+            )}
+
+            {showShipping && (
+              <div style={{ borderTop: '1px solid var(--divider)', paddingTop: 13, display: 'flex', flexDirection: 'column', gap: 13 }}>
+                <Field label="Shipping status">
+                  <select className="select" value={draft.shipping_status} onChange={(e) => updateDraft('shipping_status', e.target.value as ShippingStatus)}>
+                    {SHIPPING_STATUSES.map((s) => (
+                      <option key={s} value={s}>
+                        {s.replace(/_/g, ' ')}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Tracking number">
+                  <input className="field-input num" value={draft.tracking_number} onChange={(e) => updateDraft('tracking_number', e.target.value)} />
+                </Field>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12 }}>
+                  <Field label="Ship-to label">
+                    <input className="field-input" value={draft.ship_to_label} onChange={(e) => updateDraft('ship_to_label', e.target.value)} placeholder="Home" />
+                  </Field>
+                  <Field label="Ship-to address">
+                    <input className="field-input" value={draft.ship_to_address} onChange={(e) => updateDraft('ship_to_address', e.target.value)} />
+                  </Field>
+                </div>
+              </div>
+            )}
+
+            {saveError && <div style={{ fontSize: 12, color: 'var(--status-failed)' }}>{saveError}</div>}
+
+            <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+              <button className="btn-primary" style={{ flex: 1 }} onClick={save} disabled={saving || !draft.raw_product_text}>
+                {saving ? 'SAVING…' : 'SAVE CHANGES'}
+              </button>
+              <button className="btn-ghost" style={{ flex: 1 }} onClick={closePanel} disabled={saving}>
+                CANCEL
+              </button>
+            </div>
+            {!isNew && (
+              <button className="btn-danger" onClick={deleteCurrent} disabled={saving || deleting}>
+                {deleting ? 'DELETING…' : 'DELETE ORDER'}
+              </button>
+            )}
           </div>
-        </div>
+        )}
       </div>
     </>
   )

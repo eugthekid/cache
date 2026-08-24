@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app import crud
 from app.database import get_db
-from app.routers import backup, dashboard, inventory, license, orders, sources
+from app.routers import backup, dashboard, discord, inventory, license, orders, products, sources, sync
 from app.routers import import_ as import_router
 from app.routers import settings as settings_router
 
@@ -38,6 +38,9 @@ app.include_router(settings_router.router)
 app.include_router(license.router)
 app.include_router(backup.router)
 app.include_router(import_router.router)
+app.include_router(discord.router)
+app.include_router(sync.router)
+app.include_router(products.router)
 
 
 @app.get("/health")

@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, type LicenseStatus, type Source } from '../api/client'
+import { api, type DiscordStatus, type LicenseStatus } from '../api/client'
 import ImportWizard from '../components/ImportWizard'
 import ErrorState from '../components/ErrorState'
+import DiscordConnect from '../components/DiscordConnect'
 import { Skel } from '../components/Skeleton'
 
 function Settings(): React.JSX.Element {
   const [license, setLicense] = useState<LicenseStatus | null>(null)
-  const [sources, setSources] = useState<Source[]>([])
+  const [discordStatus, setDiscordStatus] = useState<DiscordStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [exportMessage, setExportMessage] = useState<string | null>(null)
@@ -22,9 +23,9 @@ function Settings(): React.JSX.Element {
     setLoading(true)
     setError(null)
     try {
-      const [licenseStatus, sourceList] = await Promise.all([api.license.status(), api.sources.list()])
+      const [licenseStatus, discord] = await Promise.all([api.license.status(), api.discord.status()])
       setLicense(licenseStatus)
-      setSources(sourceList)
+      setDiscordStatus(discord)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load settings')
     } finally {
@@ -78,15 +79,14 @@ function Settings(): React.JSX.Element {
     }
   }
 
-  const discordSource = sources.find((s) => s.type === 'discord_channel')
   const trialMode = localStorage.getItem('cache_trial_mode') === 'true'
 
   if (loading) {
     return (
       <>
         <div className="screen-title">Settings</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 760 }}>
-          {[1, 2, 3].map((i) => (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16 }}>
+          {[1, 2, 3, 4].map((i) => (
             <div key={i} className="card" style={{ padding: '22px 26px', display: 'flex', flexDirection: 'column', gap: 14 }}>
               <Skel style={{ width: 150, height: 14 }} />
               <Skel style={{ height: 1 }} />
@@ -110,7 +110,18 @@ function Settings(): React.JSX.Element {
         Settings
       </div>
 
-      <div style={{ position: 'relative', flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 760 }}>
+      <div
+        style={{
+          position: 'relative',
+          flex: 1,
+          overflow: 'auto',
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))',
+          gridAutoRows: 'min-content',
+          gap: 16,
+          alignContent: 'start'
+        }}
+      >
         <div className="card" style={{ padding: '22px 26px', display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
             <div style={{ fontSize: 14, fontWeight: 600 }}>License &amp; activation</div>
@@ -143,16 +154,7 @@ function Settings(): React.JSX.Element {
 
         <div className="card" style={{ padding: '22px 26px', display: 'flex', flexDirection: 'column' }}>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Integrations</div>
-          <SettingRow
-            label="Discord bot"
-            sub={discordSource ? discordSource.name : 'Not connected — run bot/run.sh with a real token'}
-            action={
-              <span className={`pill ${discordSource ? 'pill-success' : 'pill-neutral'}`}>
-                <span className="dot" />
-                {discordSource ? 'connected' : 'not connected'}
-              </span>
-            }
-          />
+          {discordStatus && <DiscordConnect status={discordStatus} onUpdated={setDiscordStatus} />}
           <SettingRow label="Email ingestion" sub="OAuth inbox scanning — not yet available" action={<span className="pill pill-neutral">coming soon</span>} dimmed />
         </div>
 

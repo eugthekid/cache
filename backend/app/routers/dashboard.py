@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from app import models
+from app import crud, models
 from app.database import get_db
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -43,6 +43,7 @@ def spend_and_revenue_by_month(months: int = Query(default=6, ge=1, le=36), db: 
 
     spend_rows = (
         db.query(_MONTH.label("month"), func.sum(models.Order.unit_price * models.Order.quantity))
+        .filter(models.Order.deleted_at.is_(None))
         .filter(models.Order.status == "success")
         .filter(func.coalesce(models.Order.purchased_at, models.Order.created_at) >= since)
         .group_by("month")
@@ -50,6 +51,7 @@ def spend_and_revenue_by_month(months: int = Query(default=6, ge=1, le=36), db: 
     )
     revenue_rows = (
         db.query(_SOLD_MONTH.label("month"), func.sum(models.InventoryItem.sold_price))
+        .filter(models.InventoryItem.deleted_at.is_(None))
         .filter(models.InventoryItem.status == "sold")
         .filter(models.InventoryItem.sold_at >= since)
         .group_by("month")
@@ -80,7 +82,7 @@ def inventory_aging(db: Session = Depends(get_db)):
     no order behind it, where purchased_at doesn't even apply).
     """
     items = (
-        db.query(models.InventoryItem)
+        crud.live_items(db)
         .filter(models.InventoryItem.status.in_(["in_hand", "listed"]))
         .all()
     )
@@ -119,6 +121,7 @@ def orders_by_retailer(db: Session = Depends(get_db)):
     since 'unknown site' isn't a retailer to compare against."""
     rows = (
         db.query(models.Order.site, func.count(models.Order.id))
+        .filter(models.Order.deleted_at.is_(None))
         .filter(models.Order.site.isnot(None))
         .group_by(models.Order.site)
         .order_by(func.count(models.Order.id).desc())
@@ -152,6 +155,8 @@ def inventory_by_category(db: Session = Depends(get_db)):
             func.sum(profit_if_sold),
         )
         .join(models.Order, models.InventoryItem.order_id == models.Order.id)
+        .filter(models.InventoryItem.deleted_at.is_(None))
+        .filter(models.Order.deleted_at.is_(None))
         .filter(models.Order.category.isnot(None))
         .group_by(models.Order.category)
         .order_by(func.count(models.InventoryItem.id).desc())

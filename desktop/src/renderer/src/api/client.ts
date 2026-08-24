@@ -65,6 +65,22 @@ const put = <T>(path: string, body: unknown): Promise<T> =>
 const postForm = <T>(path: string, form: FormData): Promise<T> =>
   request<T>(path, { method: 'POST', body: form })
 
+/** DELETE endpoints return 204 with no body -- request()'s response.json()
+ * would throw on that, so this skips parsing entirely rather than reusing it. */
+const del = async (path: string): Promise<void> => {
+  const response = await fetch(`${API_BASE}${path}`, { method: 'DELETE' })
+  if (!response.ok) {
+    let detail = response.statusText
+    try {
+      const body = await response.json()
+      detail = body.detail ?? detail
+    } catch {
+      // no JSON body -- fall back to statusText, already set above
+    }
+    throw new ApiError(detail, response.status)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Shared types
 // ---------------------------------------------------------------------------
@@ -98,6 +114,7 @@ export interface Order {
   status: OrderStatus
   failure_reason: string | null
   raw_product_text: string | null
+  product_id: string | null
   profile: string | null
   site: string | null
   module: string | null
@@ -128,19 +145,28 @@ export interface InventoryItem {
   unit_index: number | null
   status: InventoryStatus
   product_text: string | null
+  product_id: string | null
   cost_basis: number | null
   listed_price: number | null
   listed_platform: string | null
   sold_price: number | null
   sold_at: string | null
   sold_platform: string | null
+  /** When the money actually landed. Selling and getting paid are separate
+   * events (often weeks apart on consignment payouts): status='sold' with
+   * this null means sold-but-unpaid. */
+  money_received_at: string | null
   notes: string | null
   created_at: string
 }
 
 export type InventoryItemUpdate = Partial<
   Omit<InventoryItem, 'id' | 'order_id' | 'unit_index' | 'created_at'>
->
+> & {
+  /** Convenience toggle -- the backend turns this into a money_received_at
+   * timestamp (or clears it), so the UI never has to invent a date. */
+  money_received?: boolean
+}
 
 export interface InventorySummary {
   total_units: number
@@ -187,6 +213,78 @@ export interface Setting<T = Record<string, unknown>> {
   key: string
   value: T
   updated_at: string
+}
+
+export interface BulkResult {
+  updated: number
+}
+
+export type ChannelScope = 'all' | 'specific'
+
+export interface DiscordStatus {
+  configured: boolean
+  token_suffix: string | null
+  guild_id: string | null
+  channel_scope: ChannelScope | null
+  channel_ids: string | null
+  profile_filter: string | null
+}
+
+export interface DiscordConfigIn {
+  token?: string
+  guild_id: string
+  channel_scope: ChannelScope
+  channel_ids?: string
+  profile_filter?: string
+}
+
+export interface Product {
+  id: string
+  canonical_name: string
+  normalized_key: string
+  category: string | null
+  alias_count: number
+}
+
+/** One row of the grouped inventory view -- "I hold 12 of these". */
+export interface ProductGroup {
+  product_id: string | null
+  name: string | null
+  total_units: number
+  in_hand: number
+  listed: number
+  sold: number
+  total_cost_basis: number
+  total_sold_revenue: number
+  awaiting_payment: number
+}
+
+export interface MergeSuggestion {
+  source_id: string
+  target_id: string
+  source_name: string
+  target_name: string
+  reason: string
+}
+
+export interface ProductRebuildResult {
+  orders_resolved: number
+  items_resolved: number
+  products: number
+  suggestions: number
+}
+
+export interface SyncSourceStatus {
+  id: string
+  name: string
+  last_synced_at: string | null
+}
+
+export interface SyncStatus {
+  pending: boolean
+  requested_at: string | null
+  full: boolean
+  sources: SyncSourceStatus[]
 }
 
 export interface LicenseStatus {
@@ -271,7 +369,12 @@ export const api = {
     },
     get: (id: string) => get<Order>(`/orders/${id}`),
     create: (order: OrderCreate) => post<Order>('/orders', order),
-    update: (id: string, patchBody: OrderUpdate) => patch<Order>(`/orders/${id}`, patchBody)
+    update: (id: string, patchBody: OrderUpdate) => patch<Order>(`/orders/${id}`, patchBody),
+    delete: (id: string) => del(`/orders/${id}`),
+    bulkDelete: (ids: string[]) => post<BulkResult>('/orders/bulk-delete', { ids }),
+    bulkSetStatus: (ids: string[], status: OrderStatus) =>
+      post<BulkResult>('/orders/bulk-status', { ids, status }),
+    restore: (ids: string[]) => post<BulkResult>('/orders/restore', { ids })
   },
 
   inventory: {
@@ -280,7 +383,12 @@ export const api = {
     summary: () => get<InventorySummary>('/inventory/summary'),
     get: (id: string) => get<InventoryItem>(`/inventory/${id}`),
     update: (id: string, patchBody: InventoryItemUpdate) =>
-      patch<InventoryItem>(`/inventory/${id}`, patchBody)
+      patch<InventoryItem>(`/inventory/${id}`, patchBody),
+    delete: (id: string) => del(`/inventory/${id}`),
+    bulkDelete: (ids: string[]) => post<BulkResult>('/inventory/bulk-delete', { ids }),
+    bulkSetStatus: (ids: string[], status: InventoryStatus) =>
+      post<BulkResult>('/inventory/bulk-status', { ids, status }),
+    restore: (ids: string[]) => post<BulkResult>('/inventory/restore', { ids })
   },
 
   dashboard: {
@@ -295,6 +403,27 @@ export const api = {
     get: <T = Record<string, unknown>>(key: string) => get<Setting<T>>(`/settings/${key}`),
     set: <T = Record<string, unknown>>(key: string, value: T) =>
       put<Setting<T>>(`/settings/${key}`, { value })
+  },
+
+  discord: {
+    status: () => get<DiscordStatus>('/discord/status'),
+    configure: (body: DiscordConfigIn) => post<DiscordStatus>('/discord/configure', body)
+  },
+
+  products: {
+    list: () => get<Product[]>('/products'),
+    grouped: () => get<ProductGroup[]>('/products/grouped'),
+    suggestions: () => get<MergeSuggestion[]>('/products/suggestions'),
+    rebuild: () => post<ProductRebuildResult>('/products/rebuild'),
+    merge: (sourceId: string, targetId: string) =>
+      post<BulkResult>('/products/merge', { source_id: sourceId, target_id: targetId }),
+    rename: (id: string, canonicalName: string, category?: string | null) =>
+      patch<Product>(`/products/${id}`, { canonical_name: canonicalName, category })
+  },
+
+  sync: {
+    status: () => get<SyncStatus>('/sync/status'),
+    request: (full = true) => post<SyncStatus>('/sync/request', { full })
   },
 
   license: {

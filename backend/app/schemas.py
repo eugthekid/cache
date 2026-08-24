@@ -84,6 +84,7 @@ class OrderOut(BaseModel):
     status: str
     failure_reason: Optional[str]
     raw_product_text: Optional[str]
+    product_id: Optional[str]
     profile: Optional[str]
     site: Optional[str]
     module: Optional[str]
@@ -117,6 +118,11 @@ class InventoryItemUpdate(BaseModel):
     sold_price: Optional[float] = None
     sold_at: Optional[datetime] = None
     sold_platform: Optional[str] = None
+    # The UI sends a checkbox; crud.update_inventory_item translates it into
+    # the stored money_received_at timestamp (or clears it). Callers that
+    # know the real payout date can send money_received_at directly instead.
+    money_received: Optional[bool] = None
+    money_received_at: Optional[datetime] = None
     notes: Optional[str] = None
 
 
@@ -128,12 +134,14 @@ class InventoryItemOut(BaseModel):
     unit_index: Optional[int]
     status: str
     product_text: Optional[str]
+    product_id: Optional[str]
     cost_basis: Optional[float]
     listed_price: Optional[float]
     listed_platform: Optional[str]
     sold_price: Optional[float]
     sold_at: Optional[datetime]
     sold_platform: Optional[str]
+    money_received_at: Optional[datetime]
     notes: Optional[str]
     created_at: datetime
 
@@ -151,6 +159,124 @@ class SettingUpdate(BaseModel):
     shape of their setting (e.g. the complete dashboard-prefs object)."""
 
     value: dict[str, Any]
+
+
+class BulkIds(BaseModel):
+    """Shared shape for every bulk action -- the set of rows a checkbox
+    selection in the UI resolved to."""
+
+    ids: list[str]
+
+
+class BulkOrderStatusUpdate(BaseModel):
+    ids: list[str]
+    status: str  # 'success' | 'failed' | 'cancelled' | 'pending'
+
+
+class BulkInventoryStatusUpdate(BaseModel):
+    ids: list[str]
+    status: str  # 'in_hand' | 'listed' | 'sold' | 'returned' | 'lost'
+
+
+class BulkResult(BaseModel):
+    updated: int
+
+
+class ProductOut(BaseModel):
+    id: str
+    canonical_name: str
+    normalized_key: str
+    category: Optional[str] = None
+    alias_count: int = 0
+
+
+class ProductGroup(BaseModel):
+    """One row of the grouped inventory view."""
+    product_id: Optional[str]
+    name: Optional[str]
+    total_units: int
+    in_hand: int
+    listed: int
+    sold: int
+    total_cost_basis: float
+    total_sold_revenue: float
+    awaiting_payment: int
+
+
+class ProductMerge(BaseModel):
+    source_id: str
+    target_id: str
+
+
+class ProductRename(BaseModel):
+    canonical_name: str
+    category: Optional[str] = None
+
+
+class MergeSuggestion(BaseModel):
+    source_id: str
+    target_id: str
+    source_name: str
+    target_name: str
+    reason: str
+
+
+class ProductRebuildResult(BaseModel):
+    orders_resolved: int
+    items_resolved: int
+    products: int
+    suggestions: int
+
+
+class SyncSourceStatus(BaseModel):
+    id: str
+    name: str
+    last_synced_at: Optional[datetime]
+
+
+class SyncStatus(BaseModel):
+    pending: bool
+    requested_at: Optional[str] = None
+    full: bool = False
+    sources: list[SyncSourceStatus] = []
+
+
+class SyncRequest(BaseModel):
+    # True = re-walk entire channel history (recovers a wiped database);
+    # False = only messages newer than each source's last_synced_at.
+    full: bool = True
+
+
+class SyncClaim(BaseModel):
+    claimed: bool
+    full: bool
+
+
+class SourceSynced(BaseModel):
+    last_synced_at: Optional[datetime] = None
+
+
+class DiscordConfigIn(BaseModel):
+    """What the Settings 'Connect Discord' form submits. `token` is
+    optional on resubmit -- leaving it blank keeps whatever token is
+    already written to bot/.env, so changing just the channel scope
+    doesn't force re-pasting the token every time."""
+
+    token: Optional[str] = None
+    guild_id: str
+    channel_scope: str  # 'all' | 'specific'
+    channel_ids: Optional[str] = None  # comma-separated; only used when channel_scope == 'specific'
+    profile_filter: Optional[str] = None  # comma-separated
+
+
+class DiscordStatus(BaseModel):
+    configured: bool
+    # Last 4 characters only -- same convention as LicenseStatus.key_suffix.
+    token_suffix: Optional[str] = None
+    guild_id: Optional[str] = None
+    channel_scope: Optional[str] = None
+    channel_ids: Optional[str] = None
+    profile_filter: Optional[str] = None
 
 
 class LicenseActivate(BaseModel):

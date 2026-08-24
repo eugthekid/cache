@@ -11,7 +11,7 @@ router = APIRouter(prefix="/inventory", tags=["inventory"])
 
 @router.get("", response_model=list[schemas.InventoryItemOut])
 def list_inventory(status: Optional[str] = None, db: Session = Depends(get_db)):
-    query = db.query(models.InventoryItem)
+    query = crud.live_items(db)
     if status:
         query = query.filter(models.InventoryItem.status == status)
     return query.order_by(models.InventoryItem.created_at.desc()).all()
@@ -30,14 +30,18 @@ def inventory_summary(db: Session = Depends(get_db)):
     since this is a scaffold; worth moving to a SQL GROUP BY if this ever
     needs to run over a large inventory.
 
-    `total_cost_basis` IS total spend: every inventory_item's cost_basis is
-    copied from its order's unit_price at creation time (crud.create_order),
-    so summing it across every item equals summing unit_price*quantity
-    across every success order -- no separate calculation needed.
-    `est_inventory_value` is narrower on purpose: only cost_basis for units
-    still actually held (in_hand/listed), not sold/returned/lost ones.
+    `total_cost_basis` is the cost of everything you HOLD OR HELD, which is
+    deliberately NOT the same number as /dashboard/monthly's spend. It used
+    to be -- when every unit came from an order, summing cost_basis equalled
+    summing unit_price*quantity over success orders. Spreadsheet import
+    broke that equivalence by adding units with order_id=NULL (stock you
+    already owned, never bought through a tracked order), and those units
+    have a real cost basis but no purchase to attribute it to. Don't
+    "reconcile" these two numbers; they answer different questions.
+    `est_inventory_value` is narrower still: only cost_basis for units
+    actually still held (in_hand/listed), not sold/returned/lost ones.
     """
-    items = db.query(models.InventoryItem).all()
+    items = crud.live_items(db).all()
     unsold_statuses = {"in_hand", "listed"}
     return {
         "total_units": len(items),
@@ -49,13 +53,61 @@ def inventory_summary(db: Session = Depends(get_db)):
         "est_inventory_value": sum(
             i.cost_basis or 0 for i in items if i.status in unsold_statuses
         ),
-        "order_count": db.query(models.Order).count(),
+        "order_count": crud.live_orders(db).count(),
     }
+
+
+@router.post("/bulk-delete", response_model=schemas.BulkResult)
+def bulk_delete_inventory(body: schemas.BulkIds, db: Session = Depends(get_db)):
+    """
+    Deletes only the inventory_item rows themselves -- never the order they
+    came from. Removing a unit here is "I don't actually have this / this
+    was a data-entry mistake," not "undo the purchase" (that's bulk-delete
+    on the Orders side, which does cascade).
+    """
+    return schemas.BulkResult(updated=crud.soft_delete_items(db, body.ids))
+
+
+@router.post("/bulk-status", response_model=schemas.BulkResult)
+def bulk_update_inventory_status(
+    body: schemas.BulkInventoryStatusUpdate, db: Session = Depends(get_db)
+):
+    if not body.ids:
+        return schemas.BulkResult(updated=0)
+    updated = (
+        crud.live_items(db)
+        .filter(models.InventoryItem.id.in_(body.ids))
+        .update({"status": body.status}, synchronize_session=False)
+    )
+    db.commit()
+    return schemas.BulkResult(updated=updated)
+
+
+@router.post("/restore", response_model=schemas.BulkResult)
+def restore_inventory(body: schemas.BulkIds, db: Session = Depends(get_db)):
+    """Undo a delete -- see orders.py's restore_orders."""
+    if not body.ids:
+        return schemas.BulkResult(updated=0)
+    restored = (
+        db.query(models.InventoryItem)
+        .filter(models.InventoryItem.id.in_(body.ids))
+        .update({"deleted_at": None}, synchronize_session=False)
+    )
+    db.commit()
+    return schemas.BulkResult(updated=restored)
+
+
+@router.delete("/{item_id}", status_code=204)
+def delete_inventory_item(item_id: str, db: Session = Depends(get_db)):
+    item = crud.live_items(db).filter(models.InventoryItem.id == item_id).first()
+    if item is None:
+        raise HTTPException(status_code=404, detail="Inventory item not found")
+    crud.soft_delete_items(db, [item_id])
 
 
 @router.get("/{item_id}", response_model=schemas.InventoryItemOut)
 def get_inventory_item(item_id: str, db: Session = Depends(get_db)):
-    item = db.query(models.InventoryItem).filter_by(id=item_id).first()
+    item = crud.live_items(db).filter(models.InventoryItem.id == item_id).first()
     if item is None:
         raise HTTPException(status_code=404, detail="Inventory item not found")
     return item
@@ -71,7 +123,7 @@ def update_inventory_item(
     a sale price and platform. See crud.update_inventory_item for the one
     business rule attached: marking 'sold' fills in sold_at if omitted.
     """
-    item = db.query(models.InventoryItem).filter_by(id=item_id).first()
+    item = crud.live_items(db).filter(models.InventoryItem.id == item_id).first()
     if item is None:
         raise HTTPException(status_code=404, detail="Inventory item not found")
     return crud.update_inventory_item(db, item, item_in)

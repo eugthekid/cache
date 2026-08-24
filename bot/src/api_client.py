@@ -18,6 +18,8 @@ so re-running a backfill safely no-ops on checkouts already stored, the
 same "safe to re-run" property discord-checkout-tracker's own upsert had.
 """
 
+from typing import Optional
+
 import httpx
 
 from config import API_BASE_URL
@@ -68,6 +70,37 @@ class ApiClient:
         resp = await self._client.post("/orders", json={**record, "source_id": source_id})
         resp.raise_for_status()
         return resp.json()
+
+    async def get_source_last_synced(self, source_id: str) -> Optional[str]:
+        """The high-water mark for a channel: the bot only reads messages
+        newer than this on a normal startup (see mark_source_synced)."""
+        resp = await self._client.get("/sources")
+        resp.raise_for_status()
+        for source in resp.json():
+            if source["id"] == source_id:
+                return source.get("last_synced_at")
+        return None
+
+    async def mark_source_synced(self, source_id: str) -> None:
+        """Records that this channel is scanned up to now, so the next
+        startup can skip everything already seen instead of re-walking the
+        whole history."""
+        resp = await self._client.patch(f"/sources/{source_id}/synced", json={})
+        resp.raise_for_status()
+
+    async def claim_sync_request(self) -> tuple[bool, bool]:
+        """Polls for a Resync requested from the desktop app. Returns
+        (claimed, full). Claiming clears the flag server-side, so one click
+        produces exactly one scan."""
+        try:
+            resp = await self._client.post("/sync/claim")
+            resp.raise_for_status()
+            data = resp.json()
+            return bool(data.get("claimed")), bool(data.get("full"))
+        except httpx.RequestError:
+            # Backend momentarily unreachable is not fatal for a poll -- the
+            # request stays pending and the next tick will pick it up.
+            return False, False
 
     async def health_check(self) -> bool:
         """Used at startup to fail loudly and immediately if the backend
