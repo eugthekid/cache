@@ -87,6 +87,7 @@ class OrderOut(BaseModel):
     product_id: Optional[str]
     profile: Optional[str]
     site: Optional[str]
+    retailer: Optional[str]
     module: Optional[str]
     category: Optional[str]
     quantity: Optional[int]
@@ -182,6 +183,23 @@ class BulkResult(BaseModel):
     updated: int
 
 
+class RebuildRequest(BaseModel):
+    # None = every source. Set it to rebuild just one channel's deletions.
+    source_id: Optional[str] = None
+
+
+class RebuildResult(BaseModel):
+    rebuilt: int
+    skipped: int
+
+
+class DeletedSummary(BaseModel):
+    """How much is recoverable, so the UI can offer Rebuild honestly
+    instead of showing a button that might do nothing."""
+    dismissed: int
+    rebuildable: int
+
+
 class ProductOut(BaseModel):
     id: str
     canonical_name: str
@@ -254,6 +272,13 @@ class SyncClaim(BaseModel):
 
 class SourceSynced(BaseModel):
     last_synced_at: Optional[datetime] = None
+
+
+class BotServiceStatus(BaseModel):
+    supported: bool
+    installed: bool
+    running: bool
+    log_path: Optional[str] = None
 
 
 class DiscordConfigIn(BaseModel):

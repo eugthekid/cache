@@ -110,7 +110,14 @@ class Order(Base):
     product_id: Mapped[str | None] = mapped_column(ForeignKey("products.id"), default=None)
 
     profile: Mapped[str | None] = mapped_column(default=None)
+
+    # `site` is whatever the source said -- a URL from one bot, a bare name
+    # from another. `retailer` is the normalized identity derived from it
+    # (see retailers.py), which is what the UI groups, filters and displays
+    # on. Keeping both means the original is never lost and the rules can
+    # be re-run over history if they improve.
     site: Mapped[str | None] = mapped_column(default=None)
+    retailer: Mapped[str | None] = mapped_column(default=None)
     module: Mapped[str | None] = mapped_column(default=None)
 
     # Free text, same as `site`/`profile` -- NOT a foreign key into a
@@ -147,16 +154,17 @@ class Order(Base):
     purchased_at: Mapped[datetime | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
-    # SOFT delete, not a real DELETE -- and the reason is specific: Discord
-    # is the durable source of truth, and the bot re-walks a channel's whole
-    # history on every restart. A hard-deleted order has no (source_id,
-    # external_id) row left for POST /orders to dedup against, so the very
-    # next backfill silently RESURRECTS it. Keeping the row (hidden from
-    # every read path) is what makes "I deleted this" survive a resync.
-    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
+    # NOTE: there is deliberately no `deleted_at` here. Orders are HARD
+    # deleted -- what you see in the table is what exists. The job that
+    # column used to do (making a delete survive a resync) now belongs to
+    # IngestedMessage.dismissed_at, where it can't leave ghost rows in the
+    # user's own orders list. See IngestedMessage for the full reasoning.
 
     # Full backup of the original source payload, same purpose as
     # discord-checkout-tracker's raw_json: nothing is ever silently dropped.
+    # Duplicated onto IngestedMessage, which is the copy a rebuild reads --
+    # this one travels with the order so an exported/edited order is still
+    # self-describing.
     raw_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
     user: Mapped["User"] = relationship(back_populates="orders")
@@ -219,13 +227,73 @@ class InventoryItem(Base):
     notes: Mapped[str | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
-    # See Order.deleted_at -- same soft-delete reasoning. Also set when the
-    # parent order is deleted, so a resurrected-then-hidden order can't leave
-    # visible orphan units behind.
+    # Kept ONLY for standalone units -- ones imported directly from a
+    # spreadsheet in inventory mode, with no order behind them (order_id
+    # NULL). Nothing re-syncs those, so a delete can't be undone by
+    # re-materializing from a source the way an order's units can; the soft
+    # delete is their sole safety net. Units that DO belong to an order are
+    # hard deleted with it, because a rebuild recreates them.
     deleted_at: Mapped[datetime | None] = mapped_column(default=None)
 
     user: Mapped["User"] = relationship(back_populates="inventory_items")
     order: Mapped["Order | None"] = relationship(back_populates="inventory_items")
+
+
+class IngestedMessage(Base):
+    """
+    The record that a source (a Discord message, an imported spreadsheet
+    row, a manual entry) was ever seen -- kept forever, separate from the
+    Order it produces.
+
+    WHY THIS EXISTS: an Order used to do three jobs at once -- it was the
+    ingestion record, the business object you edit, AND the sync dedup key.
+    Deleting one collapsed all three, so "I don't want to track this" was
+    indistinguishable from "this never happened", and the only way to stop
+    a resync recreating it was to keep a hidden tombstone Order around
+    forever. That left ghost rows in a table the user thinks of as theirs.
+
+    Splitting them means:
+      - Orders can be HARD deleted. What you see is what exists.
+      - Dedup is a property of ingestion, where it belongs: a message we've
+        already seen is skipped whether or not an Order still exists for it.
+      - `dismissed_at` says "seen, deliberately not tracked" -- that's what
+        deleting an order sets, and it's what stops a resync bringing it back.
+      - REBUILD is a local operation: the payload is kept, so orders can be
+        re-materialized without re-reading Discord at all.
+
+    `payload` is the COMPLETE inbound OrderCreate -- every field the source
+    sent, including derived ones like `status`. Storing only the parser's
+    raw field map was tried first and was wrong: `status` is computed by the
+    bot's classify_checkout() and never appears in that map, so a rebuild
+    silently defaulted 290 failed/cancelled orders to "success" -- and
+    because success spawns inventory, invented hundreds of units that were
+    never bought. The payload has to be the whole thing a rebuild needs, not
+    the part that happens to look raw.
+
+    It still isn't a byte-exact replay of the Discord embed (no colour or
+    title), but it holds everything an Order is built from.
+    """
+    __tablename__ = "ingested_messages"
+    __table_args__ = (
+        UniqueConstraint("source_id", "external_id", name="uq_ingested_source_external"),
+    )
+
+    id: Mapped[str] = mapped_column(primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    source_id: Mapped[str] = mapped_column(ForeignKey("sources.id"))
+    external_id: Mapped[str]
+
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    # When the source reported it (Discord's message timestamp), so a
+    # rebuild can restore purchased_at without re-reading the channel.
+    occurred_at: Mapped[datetime | None] = mapped_column(default=None)
+    first_seen_at: Mapped[datetime] = mapped_column(default=_now)
+
+    # Set when the user deletes the resulting order. The order row is really
+    # gone; this is what makes that stick across a resync -- and clearing it
+    # is what "rebuild" does.
+    dismissed_at: Mapped[datetime | None] = mapped_column(default=None)
 
 
 class Product(Base):

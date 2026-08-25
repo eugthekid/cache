@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
-import { api, type Order, type OrderStatus, type ShippingStatus } from '../api/client'
+import { useEffect, useRef, useState } from 'react'
+import { api, type Order, type OrderSort, type OrderStatus, type ShippingStatus } from '../api/client'
+import GroupedOrders, { groupOrders, sortGroups } from '../components/GroupedOrders'
 import StatusPill from '../components/StatusPill'
 import ImportWizard from '../components/ImportWizard'
 import EmptyState from '../components/EmptyState'
@@ -91,23 +92,58 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
   const [showImport, setShowImport] = useState(false)
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set())
 
+  const [view, setView] = useState<'grouped' | 'lines'>(
+    () => (localStorage.getItem('cache_orders_view') as 'grouped' | 'lines') || 'grouped'
+  )
+  const [statusFilter, setStatusFilter] = useState<Set<OrderStatus>>(new Set())
+  const [sort, setSort] = useState<OrderSort>('date_desc')
+  const [search, setSearch] = useState('')
+  // Guards against out-of-order responses: changing two filters quickly
+  // fires two requests, and without this the SLOWER (older) one can land
+  // last and repaint the table with results the user already moved past.
+  const requestSeq = useRef(0)
+
   const isNew = panelMode === 'new'
   const panelOpen = panelMode !== 'closed'
 
+  // Filtering and sorting run server-side so they apply to ALL orders, not
+  // just whichever page the client happens to be holding.
   useEffect(() => {
     load()
-  }, [])
+  }, [statusFilter, sort, search])
+
+  function changeView(next: 'grouped' | 'lines'): void {
+    setView(next)
+    localStorage.setItem('cache_orders_view', next)
+    setCheckedIds(new Set())
+  }
+
+  function toggleStatus(status: OrderStatus): void {
+    setStatusFilter((prev) => {
+      const next = new Set(prev)
+      if (next.has(status)) next.delete(status)
+      else next.add(status)
+      return next
+    })
+  }
 
   async function load(): Promise<void> {
+    const seq = ++requestSeq.current
     setLoading(true)
     setError(null)
     try {
-      const list = await api.orders.list({ limit: 200 })
+      const list = await api.orders.list({
+        status: statusFilter.size ? Array.from(statusFilter).join(',') : undefined,
+        search: search.trim() || undefined,
+        sort
+      })
+      if (seq !== requestSeq.current) return // a newer request already won
       setOrders(list)
     } catch (err) {
+      if (seq !== requestSeq.current) return
       setError(err instanceof Error ? err.message : 'Failed to load orders')
     } finally {
-      setLoading(false)
+      if (seq === requestSeq.current) setLoading(false)
     }
   }
 
@@ -191,7 +227,7 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
 
   async function deleteCurrent(): Promise<void> {
     if (!selectedId) return
-    if (!window.confirm('Delete this order? Any inventory it created goes too, and a Discord resync won’t bring it back.')) return
+    if (!window.confirm('Delete this order? Any inventory it created goes too. A Discord resync won’t bring it back — use Rebuild in Settings if you want it again.')) return
     setDeleting(true)
     try {
       await api.orders.delete(selectedId)
@@ -293,6 +329,68 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
         }
       >
         <div className="card" style={{ padding: '8px 16px 14px', overflow: 'auto', display: 'flex', flexDirection: 'column', height: '100%' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '10px 0 8px' }}>
+            <div style={{ display: 'flex', gap: 3, background: 'var(--field-bg)', border: '1px solid var(--field-border)', borderRadius: 8, padding: 3 }}>
+              {(['grouped', 'lines'] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => changeView(m)}
+                  style={{
+                    padding: '5px 11px', borderRadius: 6, fontSize: 11.5, fontWeight: 600,
+                    border: 'none', cursor: 'pointer',
+                    background: view === m ? 'var(--accent-gradient)' : 'transparent',
+                    color: view === m ? 'oklch(14% 0.01 255)' : 'var(--text-secondary)'
+                  }}
+                >
+                  {m === 'grouped' ? 'By order' : 'All lines'}
+                </button>
+              ))}
+            </div>
+
+            {ORDER_STATUSES.map((s) => (
+              <button
+                key={s}
+                onClick={() => toggleStatus(s)}
+                className={`pill ${statusFilter.has(s) ? `pill-${s === 'success' ? 'success' : s === 'failed' ? 'failed' : 'neutral'}` : 'pill-neutral'}`}
+                style={{
+                  cursor: 'pointer', border: 'none',
+                  opacity: statusFilter.size === 0 || statusFilter.has(s) ? 1 : 0.4
+                }}
+              >
+                <span className="dot" />
+                {s}
+              </button>
+            ))}
+
+            <input
+              className="field-input"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search product, order number, retailer…"
+              style={{ flex: 1, minWidth: 170, height: 30, fontSize: 12 }}
+            />
+
+            <select
+              className="field-input"
+              value={sort}
+              onChange={(e) => setSort(e.target.value as OrderSort)}
+              style={{ width: 'auto', height: 30, fontSize: 12 }}
+            >
+              <option value="date_desc">Newest first</option>
+              <option value="date_asc">Oldest first</option>
+              <option value="price_desc">Price: high to low</option>
+              <option value="price_asc">Price: low to high</option>
+              <option value="product_asc">Product A–Z</option>
+              <option value="retailer_asc">Retailer A–Z</option>
+            </select>
+
+            <span className="num" style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
+              {view === 'grouped'
+                ? `${groupOrders(orders).length} orders`
+                : `${orders.length} lines`}
+            </span>
+          </div>
+
           {orders.length === 0 ? (
             <>
               <table style={{ width: '100%', borderCollapse: 'collapse', opacity: 0.4 }}>
@@ -334,6 +432,8 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
                 }
               />
             </>
+          ) : view === 'grouped' ? (
+            <GroupedOrders groups={sortGroups(groupOrders(orders), sort)} selectedId={selectedId} onSelect={selectOrder} />
           ) : (
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
@@ -342,7 +442,8 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
                     <input type="checkbox" checked={checkedIds.size === orders.length} onChange={toggleAllChecked} />
                   </th>
                   <th style={{ paddingTop: 16 }}>Product</th>
-                  <th style={{ paddingTop: 16 }}>Site</th>
+                  <th style={{ paddingTop: 16 }}>Order #</th>
+                  <th style={{ paddingTop: 16 }}>Retailer</th>
                   <th style={{ paddingTop: 16 }}>Price</th>
                   <th style={{ paddingTop: 16 }}>Qty</th>
                   <th style={{ paddingTop: 16 }}>Status</th>
@@ -364,7 +465,10 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
                       <input type="checkbox" checked={checkedIds.has(order.id)} onChange={() => toggleChecked(order.id)} />
                     </td>
                     <td style={{ fontWeight: 500 }}>{order.raw_product_text ?? '—'}</td>
-                    <td style={{ color: 'var(--text-secondary)' }}>{order.site ?? '—'}</td>
+                    <td className="num" style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                      {order.order_number || '—'}
+                    </td>
+                    <td style={{ color: 'var(--text-secondary)' }}>{order.retailer ?? order.site ?? '—'}</td>
                     <td className="num">{order.unit_price != null ? `$${order.unit_price.toFixed(2)}` : '—'}</td>
                     <td className="num">{order.quantity ?? '—'}</td>
                     <td>

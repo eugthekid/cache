@@ -85,7 +85,10 @@ def bulk_update_inventory_status(
 
 @router.post("/restore", response_model=schemas.BulkResult)
 def restore_inventory(body: schemas.BulkIds, db: Session = Depends(get_db)):
-    """Undo a delete -- see orders.py's restore_orders."""
+    """Undo a delete of a STANDALONE unit (one imported directly in
+    inventory mode, with no order behind it). Units belonging to an order
+    are hard deleted with it and come back via POST /orders/rebuild
+    instead -- see InventoryItem.deleted_at."""
     if not body.ids:
         return schemas.BulkResult(updated=0)
     restored = (

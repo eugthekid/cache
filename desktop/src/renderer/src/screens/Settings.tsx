@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type DiscordStatus, type LicenseStatus } from '../api/client'
 import ImportWizard from '../components/ImportWizard'
+import RebuildDeleted from '../components/RebuildDeleted'
 import ErrorState from '../components/ErrorState'
 import DiscordConnect from '../components/DiscordConnect'
 import { Skel } from '../components/Skeleton'
@@ -85,7 +86,7 @@ function Settings(): React.JSX.Element {
     return (
       <>
         <div className="screen-title">Settings</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {[1, 2, 3, 4].map((i) => (
             <div key={i} className="card" style={{ padding: '22px 26px', display: 'flex', flexDirection: 'column', gap: 14 }}>
               <Skel style={{ width: 150, height: 14 }} />
@@ -115,11 +116,9 @@ function Settings(): React.JSX.Element {
           position: 'relative',
           flex: 1,
           overflow: 'auto',
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))',
-          gridAutoRows: 'min-content',
-          gap: 16,
-          alignContent: 'start'
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 16
         }}
       >
         <div className="card" style={{ padding: '22px 26px', display: 'flex', flexDirection: 'column' }}>
@@ -193,6 +192,7 @@ function Settings(): React.JSX.Element {
             }
           />
           <input ref={restoreInputRef} type="file" accept=".cache" style={{ display: 'none' }} onChange={handleRestoreFile} />
+          <RebuildDeleted />
         </div>
 
         <div className="card" style={{ padding: '22px 26px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>

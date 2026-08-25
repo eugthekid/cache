@@ -335,7 +335,6 @@ def _line_key(order_number: Optional[str], product: Any) -> Optional[tuple[str, 
 def _existing_line_keys(db: Session) -> set[tuple[str, str]]:
     rows = (
         db.query(models.Order.order_number, models.Order.raw_product_text)
-        .filter(models.Order.deleted_at.is_(None))
         .filter(models.Order.order_number.isnot(None))
         .all()
     )

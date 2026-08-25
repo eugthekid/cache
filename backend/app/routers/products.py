@@ -122,7 +122,6 @@ def rebuild_products(db: Session = Depends(get_db)):
     orders = (
         db.query(models.Order)
         .filter_by(user_id=user.id)
-        .filter(models.Order.deleted_at.is_(None))
         .filter(models.Order.raw_product_text.isnot(None))
         .all()
     )

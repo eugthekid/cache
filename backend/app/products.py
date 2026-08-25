@@ -213,7 +213,6 @@ def find_merge_suggestions(db: Session, user_id: str) -> list[dict]:
     """
     rows = (
         db.query(models.Order)
-        .filter(models.Order.deleted_at.is_(None))
         .filter(models.Order.order_number.isnot(None))
         .filter(models.Order.product_id.isnot(None))
         .all()

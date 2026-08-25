@@ -35,7 +35,7 @@ function BulkActionBar<S extends string>({
   }
 
   async function handleDelete(): Promise<void> {
-    if (!window.confirm(`Delete ${count} ${noun}${count === 1 ? '' : 's'}? A Discord resync won't bring them back.`)) return
+    if (!window.confirm(`Delete ${count} ${noun}${count === 1 ? '' : 's'}? A Discord resync won't bring them back — use Rebuild in Settings if you want them again.`)) return
     setBusy(true)
     try {
       await onDelete()

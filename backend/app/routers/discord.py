@@ -13,6 +13,7 @@ bot/.env is just a normal sibling file on disk -- this does not (yet)
 solve writing config for a packaged, bot-less distribution.
 """
 
+import platform
 import re
 
 from fastapi import APIRouter, HTTPException
@@ -95,5 +96,15 @@ def configure_discord(body: schemas.DiscordConfigIn):
 
     BOT_ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
     BOT_ENV_PATH.write_text("\n".join(lines) + "\n")
+
+    # bot/src/config.py reads .env once at process startup, so a
+    # LaunchAgent-managed bot won't see this new token/scope until it's
+    # restarted. Only matters if the service is actually installed --
+    # importing here (not at module load) avoids a circular import between
+    # discord.py and bot_service.py.
+    from app.routers import bot_service
+
+    if platform.system() == "Darwin" and bot_service._is_loaded():
+        bot_service._run(["launchctl", "kickstart", "-k", f"{bot_service._gui_domain()}/{bot_service.LABEL}"])
 
     return _status_from(_read_env())

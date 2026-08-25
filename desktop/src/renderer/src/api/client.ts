@@ -116,6 +116,8 @@ export interface Order {
   raw_product_text: string | null
   product_id: string | null
   profile: string | null
+  /** Normalized retailer derived from `site` (see backend retailers.py). */
+  retailer: string | null
   site: string | null
   module: string | null
   category: string | null
@@ -236,6 +238,31 @@ export interface DiscordConfigIn {
   channel_scope: ChannelScope
   channel_ids?: string
   profile_filter?: string
+}
+
+export type OrderSort =
+  | 'date_desc'
+  | 'date_asc'
+  | 'price_desc'
+  | 'price_asc'
+  | 'product_asc'
+  | 'retailer_asc'
+
+export interface DeletedSummary {
+  dismissed: number
+  rebuildable: number
+}
+
+export interface RebuildResult {
+  rebuilt: number
+  skipped: number
+}
+
+export interface BotServiceStatus {
+  supported: boolean
+  installed: boolean
+  running: boolean
+  log_path: string | null
 }
 
 export interface Product {
@@ -359,10 +386,21 @@ export const api = {
   },
 
   orders: {
-    list: (filters?: { status?: OrderStatus; source_id?: string; limit?: number }) => {
+    list: (filters?: {
+      /** One status, or several comma-separated ("failed,cancelled"). */
+      status?: string
+      source_id?: string
+      retailer?: string
+      search?: string
+      sort?: OrderSort
+      limit?: number
+    }) => {
       const params = new URLSearchParams()
       if (filters?.status) params.set('status', filters.status)
       if (filters?.source_id) params.set('source_id', filters.source_id)
+      if (filters?.retailer) params.set('retailer', filters.retailer)
+      if (filters?.search) params.set('search', filters.search)
+      if (filters?.sort) params.set('sort', filters.sort)
       if (filters?.limit) params.set('limit', String(filters.limit))
       const qs = params.toString()
       return get<Order[]>(`/orders${qs ? `?${qs}` : ''}`)
@@ -374,7 +412,12 @@ export const api = {
     bulkDelete: (ids: string[]) => post<BulkResult>('/orders/bulk-delete', { ids }),
     bulkSetStatus: (ids: string[], status: OrderStatus) =>
       post<BulkResult>('/orders/bulk-status', { ids, status }),
-    restore: (ids: string[]) => post<BulkResult>('/orders/restore', { ids })
+    deletedSummary: () => get<DeletedSummary>('/orders/deleted-summary'),
+    // Orders are hard deleted; rebuild re-creates them from the stored
+    // ingest payloads (local -- no Discord round-trip). See backend
+    // models.IngestedMessage.
+    rebuild: (sourceId?: string) =>
+      post<RebuildResult>('/orders/rebuild', { source_id: sourceId ?? null })
   },
 
   inventory: {
@@ -424,6 +467,13 @@ export const api = {
   sync: {
     status: () => get<SyncStatus>('/sync/status'),
     request: (full = true) => post<SyncStatus>('/sync/request', { full })
+  },
+
+  botService: {
+    status: () => get<BotServiceStatus>('/discord/service/status'),
+    install: () => post<BotServiceStatus>('/discord/service/install'),
+    uninstall: () => post<BotServiceStatus>('/discord/service/uninstall'),
+    restart: () => post<BotServiceStatus>('/discord/service/restart')
   },
 
   license: {

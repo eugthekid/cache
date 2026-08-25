@@ -6,19 +6,21 @@ kept out of the routers so the business rules live in one place regardless
 of which endpoint (or, later, which ingestion source) triggers them.
 """
 
+from datetime import datetime
+
 from sqlalchemy.orm import Session
 
-from app import models, products
+from app import models, products, retailers
 from app.models import _now
 
 
 def live_orders(db: Session):
-    """Every read path must go through this rather than db.query(Order)
-    directly -- soft-deleted rows still exist (see Order.deleted_at for
-    why) and would otherwise show up in lists, counts, and dashboards.
-    The ONE deliberate exception is the dedup lookup in POST /orders,
-    which must see deleted rows so a resync can't resurrect them."""
-    return db.query(models.Order).filter(models.Order.deleted_at.is_(None))
+    """All orders. Kept as a named helper (rather than inlining
+    db.query(Order) at ~10 call sites) because orders were soft-deleted
+    until recently and every read path had to filter tombstones out. They
+    are hard deleted now -- see IngestedMessage -- so there is nothing left
+    to filter, and this exists so that stays true in one place."""
+    return db.query(models.Order)
 
 
 def live_items(db: Session):
@@ -26,20 +28,40 @@ def live_items(db: Session):
     return db.query(models.InventoryItem).filter(models.InventoryItem.deleted_at.is_(None))
 
 
-def soft_delete_orders(db: Session, order_ids: list[str]) -> int:
-    """Marks orders deleted along with the inventory they spawned. Returns
-    how many orders were affected (not counting their units)."""
+def delete_orders(db: Session, order_ids: list[str]) -> int:
+    """
+    Really deletes orders and the units they spawned, and marks their
+    source messages dismissed so a resync doesn't just bring them back.
+
+    Those two halves are the whole design: the hard delete is what keeps
+    the user's orders table honest (no hidden rows), and the dismissal is
+    what makes the delete survive the next sync. Undoing it is
+    rebuild_from_messages(), which clears the dismissal and re-materializes
+    from the stored payload -- no Discord round-trip needed.
+    """
     if not order_ids:
         return 0
+
+    # Read the (source_id, external_id) pairs BEFORE deleting the rows that
+    # carry them -- afterwards there is nothing left to look them up by.
+    keys = (
+        db.query(models.Order.source_id, models.Order.external_id)
+        .filter(models.Order.id.in_(order_ids))
+        .all()
+    )
     now = _now()
+    for source_id, external_id in keys:
+        db.query(models.IngestedMessage).filter_by(
+            source_id=source_id, external_id=external_id
+        ).update({"dismissed_at": now}, synchronize_session=False)
+
     db.query(models.InventoryItem).filter(
-        models.InventoryItem.order_id.in_(order_ids),
-        models.InventoryItem.deleted_at.is_(None),
-    ).update({"deleted_at": now}, synchronize_session=False)
+        models.InventoryItem.order_id.in_(order_ids)
+    ).delete(synchronize_session=False)
     count = (
         db.query(models.Order)
-        .filter(models.Order.id.in_(order_ids), models.Order.deleted_at.is_(None))
-        .update({"deleted_at": now}, synchronize_session=False)
+        .filter(models.Order.id.in_(order_ids))
+        .delete(synchronize_session=False)
     )
     db.commit()
     return count
@@ -76,13 +98,55 @@ def get_or_create_default_user(db: Session) -> models.User:
     return user
 
 
-def create_order(db: Session, user_id: str, order_in) -> models.Order:
+def _jsonable(data: dict) -> dict:
+    """datetimes -> ISO strings, so the payload round-trips through the JSON
+    column and back into OrderCreate unchanged."""
+    return {
+        k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in data.items()
+    }
+
+
+def record_message(db: Session, user_id: str, order_in) -> models.IngestedMessage:
     """
-    Insert an order and, if it's a genuine success, spawn one InventoryItem
-    per unit of quantity -- the business rule we designed: only successful
-    checkouts ever produce physical inventory to track.
+    Upsert the "we have seen this" record for an incoming payload. This is
+    the sync dedup key now -- it survives the order being deleted, which is
+    exactly what stops a resync from recreating something you removed.
+    """
+    message = (
+        db.query(models.IngestedMessage)
+        .filter_by(source_id=order_in.source_id, external_id=order_in.external_id)
+        .first()
+    )
+    if message is None:
+        message = models.IngestedMessage(
+            user_id=user_id,
+            source_id=order_in.source_id,
+            external_id=order_in.external_id,
+            # The ENTIRE inbound payload, not just order_in.raw_json --
+            # status and friends are derived upstream and exist nowhere
+            # else. See IngestedMessage.payload.
+            payload=_jsonable(order_in.model_dump()),
+            occurred_at=order_in.purchased_at,
+        )
+        db.add(message)
+        db.flush()
+    return message
+
+
+def materialize_order(db: Session, user_id: str, order_in) -> models.Order:
+    """
+    Build the Order (and its inventory units) from a payload. Split out of
+    create_order so a rebuild can re-run exactly the same construction from
+    a stored message, rather than duplicating the business rules.
     """
     order = models.Order(user_id=user_id, **order_in.model_dump())
+
+    # Normalize at INGEST so history and new arrivals are always consistent.
+    # Both derivations keep the original: `site` is untouched beside
+    # `retailer`, and the uncleaned product text stays in the stored payload.
+    order.retailer = retailers.display_name(order.site)
+    if order.raw_product_text:
+        order.raw_product_text = products.display_name(order.raw_product_text)
 
     # Resolve product identity at INGEST, not later: if this only happened
     # in the /products/rebuild batch, every newly-arrived checkout would sit
@@ -112,6 +176,15 @@ def create_order(db: Session, user_id: str, order_in) -> models.Order:
         db.commit()
 
     return order
+
+
+def create_order(db: Session, user_id: str, order_in) -> models.Order:
+    """
+    Insert an order and, if it's a genuine success, spawn one InventoryItem
+    per unit of quantity -- the business rule we designed: only successful
+    checkouts ever produce physical inventory to track.
+    """
+    return materialize_order(db, user_id, order_in)
 
 
 def update_order(db: Session, order: models.Order, order_in) -> models.Order:
@@ -156,3 +229,62 @@ def update_inventory_item(
     db.commit()
     db.refresh(item)
     return item
+
+
+def rebuild_from_messages(
+    db: Session, user_id: str, source_id: str | None = None
+) -> dict:
+    """
+    Undo deletions by re-creating orders from the messages we already
+    stored -- the counterpart to delete_orders().
+
+    This is a LOCAL operation. Because IngestedMessage keeps the payload,
+    nothing here touches Discord: no re-walking channels, no rate limits,
+    no waiting on a bot to be running. That is the main practical payoff of
+    splitting messages from orders.
+
+    Only messages that are dismissed AND have no order are rebuilt, so this
+    is safe to run repeatedly and can never duplicate a live order.
+    Restricted to one source when `source_id` is given.
+    """
+    from app import schemas  # local import: schemas imports nothing from crud
+
+    query = db.query(models.IngestedMessage).filter(
+        models.IngestedMessage.user_id == user_id,
+        models.IngestedMessage.dismissed_at.isnot(None),
+    )
+    if source_id:
+        query = query.filter(models.IngestedMessage.source_id == source_id)
+
+    existing_keys = {
+        (o.source_id, o.external_id)
+        for o in db.query(models.Order.source_id, models.Order.external_id).all()
+    }
+
+    rebuilt = 0
+    skipped = 0
+    for message in query.all():
+        if (message.source_id, message.external_id) in existing_keys:
+            # An order already exists for this message -- clear the stale
+            # dismissal but don't build a second one.
+            message.dismissed_at = None
+            skipped += 1
+            continue
+
+        payload = message.payload or {}
+        if not payload:
+            # Nothing stored to rebuild from (rows that predate payload
+            # capture). Leave it dismissed rather than inventing an order.
+            skipped += 1
+            continue
+
+        # The payload IS an OrderCreate -- rebuild is a replay, not a
+        # re-derivation, so a rebuilt order is identical to the original
+        # rather than a best-effort reconstruction of it.
+        order_in = schemas.OrderCreate(**payload)
+        materialize_order(db, user_id, order_in)
+        message.dismissed_at = None
+        rebuilt += 1
+
+    db.commit()
+    return {"rebuilt": rebuilt, "skipped": skipped}

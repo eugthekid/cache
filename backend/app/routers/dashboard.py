@@ -43,7 +43,6 @@ def spend_and_revenue_by_month(months: int = Query(default=6, ge=1, le=36), db: 
 
     spend_rows = (
         db.query(_MONTH.label("month"), func.sum(models.Order.unit_price * models.Order.quantity))
-        .filter(models.Order.deleted_at.is_(None))
         .filter(models.Order.status == "success")
         .filter(func.coalesce(models.Order.purchased_at, models.Order.created_at) >= since)
         .group_by("month")
@@ -117,17 +116,21 @@ def inventory_aging(db: Session = Depends(get_db)):
 
 @router.get("/by-retailer")
 def orders_by_retailer(db: Session = Depends(get_db)):
-    """Order counts grouped by site, most-orders first -- nulls excluded
-    since 'unknown site' isn't a retailer to compare against."""
+    """Order counts by RETAILER, most-orders first -- nulls excluded since
+    'unknown retailer' isn't something to compare against.
+
+    Groups on the normalized `retailer`, not raw `site`: the same shop
+    arrives as both "https://www.pokemoncenter.com" and "PokemonCenter.com"
+    depending on the bot, so grouping the raw value split one retailer into
+    several rows and under-counted every one of them."""
     rows = (
-        db.query(models.Order.site, func.count(models.Order.id))
-        .filter(models.Order.deleted_at.is_(None))
-        .filter(models.Order.site.isnot(None))
-        .group_by(models.Order.site)
+        db.query(models.Order.retailer, func.count(models.Order.id))
+        .filter(models.Order.retailer.isnot(None))
+        .group_by(models.Order.retailer)
         .order_by(func.count(models.Order.id).desc())
         .all()
     )
-    return [{"site": site, "order_count": count} for site, count in rows]
+    return [{"site": retailer, "order_count": count} for retailer, count in rows]
 
 
 @router.get("/by-category")
@@ -156,7 +159,6 @@ def inventory_by_category(db: Session = Depends(get_db)):
         )
         .join(models.Order, models.InventoryItem.order_id == models.Order.id)
         .filter(models.InventoryItem.deleted_at.is_(None))
-        .filter(models.Order.deleted_at.is_(None))
         .filter(models.Order.category.isnot(None))
         .group_by(models.Order.category)
         .order_by(func.count(models.InventoryItem.id).desc())
