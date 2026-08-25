@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, type ChannelScope, type DiscordStatus, type SyncStatus } from '../api/client'
+import BotServiceControl from './BotServiceControl'
 
 interface DiscordConnectProps {
   status: DiscordStatus
@@ -7,9 +8,11 @@ interface DiscordConnectProps {
 }
 
 /** The "Connect Discord" form in Settings -- writes bot/.env through the
- * backend instead of the user hand-editing it. Doesn't start or manage the
- * bot process itself; see backend/app/routers/discord.py's docstring for
- * why (closing Cache shouldn't stop checkouts from being logged). */
+ * backend instead of the user hand-editing it. The form itself still
+ * doesn't run the bot process (see backend/app/routers/discord.py's
+ * docstring for why it stays separate from Cache); BotServiceControl below
+ * is the part that actually keeps a bot process alive, via a macOS
+ * LaunchAgent instead of a manually-run terminal. */
 function DiscordConnect({ status, onUpdated }: DiscordConnectProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
@@ -82,46 +85,54 @@ function DiscordConnect({ status, onUpdated }: DiscordConnectProps): React.JSX.E
       <div
         style={{
           display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 20,
+          flexDirection: 'column',
+          gap: 10,
           padding: '16px 0',
           borderTop: '1px solid var(--divider)'
         }}
       >
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 500 }}>Discord bot</div>
-          <div className="num" style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 2 }}>
-            {status.configured
-              ? `Server ${status.guild_id} · ${status.channel_scope === 'all' ? 'all channels' : `${status.channel_ids?.split(',').length ?? 0} channel(s)`}${status.profile_filter ? ` · filtering: ${status.profile_filter}` : ''}`
-              : 'Not connected yet'}
+        {/* Identity row: title + status pill on the left, the one primary
+           action on the right. Kept to just these two things because this
+           card is narrow (one cell of a 2x2 grid) -- Resync and the
+           service control below each get their own full-width row instead
+           of competing for space here. */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <span style={{ fontSize: 13, fontWeight: 500 }}>Discord bot</span>
+            <span className={`pill ${status.configured ? 'pill-success' : 'pill-neutral'}`}>
+              <span className="dot" />
+              {status.configured ? 'configured' : 'not connected'}
+            </span>
           </div>
-          {status.configured && (
-            <div className="num" style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 4 }}>
-              {sync?.pending ? 'Resync queued — the bot picks it up within ~20s' : lastSyncedLabel()}
-            </div>
-          )}
+          <button className="btn-ghost" style={{ padding: '8px 14px', fontSize: 12.5, flexShrink: 0 }} onClick={startEdit}>
+            {status.configured ? 'Edit' : 'Connect'}
+          </button>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span className={`pill ${status.configured ? 'pill-success' : 'pill-neutral'}`}>
-            <span className="dot" />
-            {status.configured ? 'configured' : 'not connected'}
-          </span>
-          {status.configured && (
+
+        <div className="num" style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+          {status.configured
+            ? `Server ${status.guild_id} · ${status.channel_scope === 'all' ? 'all channels' : `${status.channel_ids?.split(',').length ?? 0} channel(s)`}${status.profile_filter ? ` · filtering: ${status.profile_filter}` : ''}`
+            : 'Not connected yet'}
+        </div>
+
+        {status.configured && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <span className="num" style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+              {sync?.pending ? 'Resync queued — the bot picks it up within ~20s' : lastSyncedLabel()}
+            </span>
             <button
               className="btn-ghost"
-              style={{ padding: '8px 14px', fontSize: 12.5 }}
+              style={{ padding: '6px 12px', fontSize: 12, flexShrink: 0 }}
               onClick={requestResync}
               disabled={resyncing || sync?.pending}
               title="Re-read the whole channel history. Anything you deleted in Cache stays deleted."
             >
               {sync?.pending ? 'Queued…' : resyncing ? 'Requesting…' : 'Resync'}
             </button>
-          )}
-          <button className="btn-ghost" style={{ padding: '8px 14px', fontSize: 12.5 }} onClick={startEdit}>
-            {status.configured ? 'Edit' : 'Connect'}
-          </button>
-        </div>
+          </div>
+        )}
+
+        {status.configured && <BotServiceControl />}
       </div>
     )
   }
@@ -134,11 +145,27 @@ function DiscordConnect({ status, onUpdated }: DiscordConnectProps): React.JSX.E
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>
             Saved. The bot itself runs as its own process, separate from Cache, so it keeps logging checkouts even
-            when Cache is closed — start it with:
+            when Cache is closed.
           </div>
-          <div className="num" style={{ fontSize: 12, padding: '10px 12px', background: 'var(--field-bg)', border: '1px solid var(--field-border)', borderRadius: 8 }}>
-            cd bot && ./run.sh
-          </div>
+          <BotServiceControl />
+          <details>
+            <summary style={{ fontSize: 11.5, color: 'var(--text-faint)', cursor: 'pointer' }}>
+              Prefer to run it yourself?
+            </summary>
+            <div
+              className="num"
+              style={{
+                fontSize: 12,
+                marginTop: 8,
+                padding: '10px 12px',
+                background: 'var(--field-bg)',
+                border: '1px solid var(--field-border)',
+                borderRadius: 8
+              }}
+            >
+              cd bot && ./run.sh
+            </div>
+          </details>
           <button className="btn-ghost" style={{ padding: '8px 14px', fontSize: 12.5, alignSelf: 'flex-start' }} onClick={() => setOpen(false)}>
             Done
           </button>

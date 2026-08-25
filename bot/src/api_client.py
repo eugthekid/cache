@@ -63,12 +63,17 @@ class ApiClient:
         _source_cache[channel_id] = source_id
         return source_id
 
-    async def post_order(self, record: dict, source_id: str) -> dict:
+    async def post_order(self, record: dict, source_id: str) -> Optional[dict]:
         """POSTs one parsed checkout. Returns the order as the API sees it
         (whether newly created or the pre-existing match from a dedup
-        no-op) -- callers use this to tell "new" from "already had it"."""
+        no-op), or None when the backend answers 204 -- which means the
+        user previously DELETED this checkout, so it is deliberately not
+        being re-created. Callers must treat None as "correctly skipped",
+        not as an error."""
         resp = await self._client.post("/orders", json={**record, "source_id": source_id})
         resp.raise_for_status()
+        if resp.status_code == 204 or not resp.content:
+            return None
         return resp.json()
 
     async def get_source_last_synced(self, source_id: str) -> Optional[str]:

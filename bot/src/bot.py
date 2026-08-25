@@ -71,15 +71,18 @@ class CheckoutBot(discord.Client):
         works without asking the user to open a port."""
         while not self.is_closed():
             await asyncio.sleep(self.RESYNC_POLL_SECONDS)
+            # The scan is inside the try as well as the poll: an exception
+            # from backfill_history would otherwise kill this task outright,
+            # silently disabling every future resync until the bot is
+            # restarted, while the process kept running and looking healthy.
             try:
                 claimed, full = await self.api.claim_sync_request()
-            except Exception as exc:  # never let a poll kill the bot
-                print(f"(resync poll failed: {exc})")
-                continue
-            if claimed:
-                kind = "full" if full else "incremental"
-                print(f"Resync requested from Cache ({kind}). Scanning...")
-                await self.backfill_history(full=full)
+                if claimed:
+                    kind = "full" if full else "incremental"
+                    print(f"Resync requested from Cache ({kind}). Scanning...")
+                    await self.backfill_history(full=full)
+            except Exception as exc:  # never let one bad scan end the loop
+                print(f"(resync failed: {exc!r} -- will retry on the next poll)")
 
     def _channels_to_scan(self, guild: discord.Guild) -> list[discord.abc.Messageable]:
         if config.SCAN_ALL_CHANNELS:
@@ -106,6 +109,7 @@ class CheckoutBot(discord.Client):
 
         total_sent = 0
         total_skipped = 0
+        total_dismissed = 0
         for channel in channels:
             source_id = await self.api.get_or_create_source(channel.id, channel.name, guild.id)
 
@@ -129,8 +133,14 @@ class CheckoutBot(discord.Client):
                     if not config.matches_profile_filter(record.get("profile")):
                         total_skipped += 1
                         continue
-                    await self.api.post_order(record, source_id)
-                    total_sent += 1
+                    order = await self.api.post_order(record, source_id)
+                    if order is None:
+                        # Previously deleted in Cache -- deliberately not
+                        # re-created. Counted so the summary doesn't look
+                        # like the scan silently lost messages.
+                        total_dismissed += 1
+                    else:
+                        total_sent += 1
             except discord.Forbidden:
                 print(f"  (no access to #{channel.name}, skipping)")
             except discord.HTTPException as exc:
@@ -141,8 +151,13 @@ class CheckoutBot(discord.Client):
                 # the next incremental run skip the messages we just missed.
                 await self.api.mark_source_synced(source_id)
 
-        skipped_note = f" ({total_skipped} skipped -- didn't match PROFILE_FILTER)" if total_skipped else ""
-        print(f"Backfill complete: {total_sent} checkouts sent to the backend{skipped_note}.")
+        notes = []
+        if total_skipped:
+            notes.append(f"{total_skipped} skipped -- didn't match PROFILE_FILTER")
+        if total_dismissed:
+            notes.append(f"{total_dismissed} left out -- deleted in Cache")
+        suffix = f" ({'; '.join(notes)})" if notes else ""
+        print(f"Backfill complete: {total_sent} checkouts sent to the backend{suffix}.")
         print("Now listening for new checkouts.")
 
     async def on_message(self, message: discord.Message) -> None:
@@ -160,6 +175,9 @@ class CheckoutBot(discord.Client):
             message.channel.id, message.channel.name, message.guild.id
         )
         order = await self.api.post_order(record, source_id)
+        if order is None:
+            # A checkout the user already deleted, posted again live.
+            return
         print(
             f"Logged {order['status']} checkout in #{message.channel.name}: "
             f"{record.get('raw_product_text')} (profile: {record.get('profile') or '?'})"
