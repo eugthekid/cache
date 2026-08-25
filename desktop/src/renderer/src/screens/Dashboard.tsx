@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   api,
   type AgingSummary,
@@ -16,22 +16,57 @@ import ImportWizard from '../components/ImportWizard'
 type ChartMode = 'spending' | 'sales' | 'both'
 type WidgetView = 'age' | 'retailer' | 'category'
 
-const CHART_W = 620
-const CHART_H = 180
 const PAD_X = 20
-const BASELINE = 150
-const TOP = 14
+const PAD_TOP = 14
+const PAD_BOTTOM = 30
+// Only used before the container has been measured, so the first paint has
+// something sane to draw rather than collapsing to zero.
+const FALLBACK_SIZE = { w: 620, h: 180 }
 
-/** Maps a series of numbers onto the chart's fixed viewBox, scaling to
- * that series' own max (or a shared max, when passed in) so a single-value
+/**
+ * The chart's on-screen size in real pixels.
+ *
+ * WHY MEASURE instead of a fixed viewBox: the SVG previously used a
+ * 620x180 viewBox with preserveAspectRatio="none", which stretches the x
+ * and y axes by DIFFERENT factors to fill the container. That distorts
+ * every shape drawn in it -- circles rendered as tall ellipses, and stroke
+ * widths that varied with line direction. Matching the viewBox to the
+ * element's actual pixel size means the scale factor is exactly 1 on both
+ * axes, so a circle is a circle.
+ */
+function useChartSize(): [React.RefObject<HTMLDivElement | null>, { w: number; h: number }] {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const [size, setSize] = useState(FALLBACK_SIZE)
+
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect
+      if (width > 0 && height > 0) setSize({ w: width, h: height })
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
+  return [ref, size]
+}
+
+/** Maps a series of numbers into the chart's pixel space, scaling to that
+ * series' own max (or a shared max, when passed in) so a single-value
  * chart doesn't render as a flat line pinned to the top or bottom. */
-function toPoints(values: number[], sharedMax?: number): { x: number; y: number }[] {
+function toPoints(
+  values: number[],
+  size: { w: number; h: number },
+  sharedMax?: number
+): { x: number; y: number }[] {
   const max = sharedMax ?? Math.max(...values, 1)
   const n = values.length
-  const step = n > 1 ? (CHART_W - PAD_X * 2) / (n - 1) : 0
+  const step = n > 1 ? (size.w - PAD_X * 2) / (n - 1) : 0
+  const baseline = size.h - PAD_BOTTOM
   return values.map((v, i) => ({
     x: PAD_X + step * i,
-    y: BASELINE - (max > 0 ? (v / max) * (BASELINE - TOP) : 0)
+    y: baseline - (max > 0 ? (v / max) * (baseline - PAD_TOP) : 0)
   }))
 }
 
@@ -61,6 +96,7 @@ function Dashboard({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
   const [chartMode, setChartMode] = useState<ChartMode>('spending')
   const [widgetView, setWidgetView] = useState<WidgetView>('age')
   const [showImport, setShowImport] = useState(false)
+  const [chartRef, chartSize] = useChartSize()
 
   useEffect(() => {
     load()
@@ -91,14 +127,15 @@ function Dashboard({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
     }
   }
 
-  const spendPoints = useMemo(() => toPoints(monthly.map((m) => m.spend)), [monthly])
-  const revenuePoints = useMemo(() => toPoints(monthly.map((m) => m.revenue)), [monthly])
+  const spendPoints = useMemo(() => toPoints(monthly.map((m) => m.spend), chartSize), [monthly, chartSize])
+  const revenuePoints = useMemo(() => toPoints(monthly.map((m) => m.revenue), chartSize), [monthly, chartSize])
   const sharedMax = useMemo(
     () => Math.max(...monthly.map((m) => m.spend), ...monthly.map((m) => m.revenue), 1),
     [monthly]
   )
-  const bothSpendPoints = useMemo(() => toPoints(monthly.map((m) => m.spend), sharedMax), [monthly, sharedMax])
-  const bothRevenuePoints = useMemo(() => toPoints(monthly.map((m) => m.revenue), sharedMax), [monthly, sharedMax])
+  const bothSpendPoints = useMemo(() => toPoints(monthly.map((m) => m.spend), chartSize, sharedMax), [monthly, chartSize, sharedMax])
+  const bothRevenuePoints = useMemo(() => toPoints(monthly.map((m) => m.revenue), chartSize, sharedMax), [monthly, chartSize, sharedMax])
+  const baseline = chartSize.h - PAD_BOTTOM
 
   const totalSpend6mo = monthly.reduce((sum, m) => sum + m.spend, 0)
   const totalRevenue6mo = monthly.reduce((sum, m) => sum + m.revenue, 0)
@@ -260,17 +297,24 @@ function Dashboard({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
             <EmptyChart />
           ) : (
             <>
-              <svg viewBox={`0 0 ${CHART_W} ${CHART_H}`} preserveAspectRatio="none" style={{ width: '100%', flex: 1, minHeight: 0 }}>
-                <line x1={PAD_X} y1={BASELINE} x2={CHART_W - PAD_X} y2={BASELINE} stroke="var(--divider)" strokeWidth="1" />
-                {chartMode !== 'both' ? (
-                  <ChartLine points={chartMode === 'spending' ? spendPoints : revenuePoints} color={chartMode === 'spending' ? 'var(--accent-cyan)' : 'var(--status-success)'} />
-                ) : (
-                  <>
-                    <ChartLine points={bothSpendPoints} color="var(--accent-cyan)" />
-                    <ChartLine points={bothRevenuePoints} color="var(--status-success)" />
-                  </>
-                )}
-              </svg>
+              <div ref={chartRef} style={{ flex: 1, minHeight: 0, width: '100%' }}>
+                <svg
+                  width={chartSize.w}
+                  height={chartSize.h}
+                  viewBox={`0 0 ${chartSize.w} ${chartSize.h}`}
+                  style={{ display: 'block' }}
+                >
+                  <line x1={PAD_X} y1={baseline} x2={chartSize.w - PAD_X} y2={baseline} stroke="var(--divider)" strokeWidth="1" />
+                  {chartMode !== 'both' ? (
+                    <ChartLine points={chartMode === 'spending' ? spendPoints : revenuePoints} baseline={baseline} color={chartMode === 'spending' ? 'var(--accent-cyan)' : 'var(--status-success)'} />
+                  ) : (
+                    <>
+                      <ChartLine points={bothSpendPoints} baseline={baseline} color="var(--accent-cyan)" />
+                      <ChartLine points={bothRevenuePoints} baseline={baseline} color="var(--status-success)" />
+                    </>
+                  )}
+                </svg>
+              </div>
               <div style={{ display: 'flex', padding: '0 20px' }}>
                 {monthly.map((m) => (
                   <span key={m.month} className="num" style={{ fontSize: 10.5, color: 'var(--text-faint)', flex: 1, textAlign: 'center' }}>
@@ -366,10 +410,18 @@ function KpiCard({
   )
 }
 
-function ChartLine({ points, color }: { points: { x: number; y: number }[]; color: string }): React.JSX.Element {
+function ChartLine({
+  points,
+  baseline,
+  color
+}: {
+  points: { x: number; y: number }[]
+  baseline: number
+  color: string
+}): React.JSX.Element {
   if (points.length === 0) return <></>
   const path = pointsToPath(points)
-  const areaPath = `${path} ${points[points.length - 1].x},${BASELINE} ${points[0].x},${BASELINE}`
+  const areaPath = `${path} ${points[points.length - 1].x},${baseline} ${points[0].x},${baseline}`
   const gradId = `grad-${color.replace(/[^a-z]/gi, '')}`
   return (
     <>
