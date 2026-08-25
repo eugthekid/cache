@@ -115,6 +115,10 @@ export interface Order {
   failure_reason: string | null
   raw_product_text: string | null
   product_id: string | null
+  /** The matched product's standardized name, or raw_product_text when
+   * there's no match yet -- always prefer this over raw_product_text for
+   * display, so Orders and Inventory show the same name for one purchase. */
+  product_name: string | null
   profile: string | null
   /** Normalized retailer derived from `site` (see backend retailers.py). */
   retailer: string | null
@@ -149,6 +153,7 @@ export interface InventoryItem {
   status: InventoryStatus
   product_text: string | null
   product_id: string | null
+  location: string | null
   cost_basis: number | null
   listed_price: number | null
   listed_platform: string | null
@@ -285,6 +290,9 @@ export interface ProductGroup {
   total_cost_basis: number
   total_sold_revenue: number
   awaiting_payment: number
+  /** null when nothing's sold yet -- distinct from 0 (which would claim
+   * units sold for free). */
+  avg_sale_price: number | null
   image_url: string | null
 }
 

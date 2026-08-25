@@ -178,6 +178,19 @@ class Order(Base):
     user: Mapped["User"] = relationship(back_populates="orders")
     source: Mapped["Source"] = relationship(back_populates="orders")
     inventory_items: Mapped[list["InventoryItem"]] = relationship(back_populates="order")
+    product: Mapped["Product | None"] = relationship()
+
+    @property
+    def product_name(self) -> str | None:
+        """What the UI should actually display -- the matched product's
+        standardized catalog name when there is one, falling back to the
+        raw retailer text. Exists because Orders and Inventory used to
+        show two different names for the SAME purchase (one cleaned by
+        catalog matching, one not), which read as two different products
+        at a glance. A plain property rather than a stored column: it's
+        fully derived from product_id, so it can never drift out of sync
+        with a rename or a re-match."""
+        return self.product.canonical_name if self.product else self.raw_product_text
 
 
 class InventoryItem(Base):
@@ -218,6 +231,14 @@ class InventoryItem(Base):
     status: Mapped[str] = mapped_column(default="in_hand")
 
     cost_basis: Mapped[float | None] = mapped_column(default=None)
+
+    # Free text for now ("Closet A", "Storage bin 3"). Deliberately not
+    # structured -- the user's eventual ask is tracking WHO an item shipped
+    # to (importing addresses/profiles), which is a real feature, not a
+    # bigger version of this field; that gets its own model when it's
+    # built rather than this column growing awkwardly into it.
+    location: Mapped[str | None] = mapped_column(default=None)
+
     listed_price: Mapped[float | None] = mapped_column(default=None)
     listed_platform: Mapped[str | None] = mapped_column(default=None)
     sold_price: Mapped[float | None] = mapped_column(default=None)

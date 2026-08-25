@@ -86,6 +86,9 @@ class OrderOut(BaseModel):
     failure_reason: Optional[str]
     raw_product_text: Optional[str]
     product_id: Optional[str]
+    # The matched product's standardized name, falling back to
+    # raw_product_text -- see Order.product_name.
+    product_name: Optional[str]
     profile: Optional[str]
     site: Optional[str]
     retailer: Optional[str]
@@ -116,6 +119,7 @@ class InventoryItemUpdate(BaseModel):
     status: Optional[str] = None  # 'in_hand' | 'listed' | 'sold' | 'returned' | 'lost'
     product_text: Optional[str] = None
     cost_basis: Optional[float] = None
+    location: Optional[str] = None
     listed_price: Optional[float] = None
     listed_platform: Optional[str] = None
     sold_price: Optional[float] = None
@@ -139,6 +143,7 @@ class InventoryItemOut(BaseModel):
     product_text: Optional[str]
     product_id: Optional[str]
     cost_basis: Optional[float]
+    location: Optional[str]
     listed_price: Optional[float]
     listed_platform: Optional[str]
     sold_price: Optional[float]
@@ -221,6 +226,9 @@ class ProductGroup(BaseModel):
     total_cost_basis: float
     total_sold_revenue: float
     awaiting_payment: int
+    # None when nothing's sold yet -- distinct from 0, which would claim
+    # units sold for free.
+    avg_sale_price: Optional[float] = None
     # Catalog image if matched, else the most recent order's embed
     # thumbnail, else null -- see routers/products.py's resolution order.
     image_url: Optional[str] = None

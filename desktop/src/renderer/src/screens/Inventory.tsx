@@ -7,6 +7,7 @@ import BulkActionBar from '../components/BulkActionBar'
 import { Skel, TableSkeleton } from '../components/Skeleton'
 import ImportWizard from '../components/ImportWizard'
 import GroupedInventory from '../components/GroupedInventory'
+import ProductDetail from '../components/ProductDetail'
 import type { ProductGroup } from '../api/client'
 import type { Screen } from '../components/NavRail'
 
@@ -17,6 +18,7 @@ const ITEM_STATUSES: InventoryStatus[] = ['in_hand', 'listed', 'sold', 'returned
 type DraftItem = {
   status: InventoryStatus
   cost_basis: string
+  location: string
   listed_price: string
   listed_platform: string
   sold_price: string
@@ -30,6 +32,7 @@ function itemToDraft(item: InventoryItem): DraftItem {
   return {
     status: item.status,
     cost_basis: item.cost_basis != null ? String(item.cost_basis) : '',
+    location: item.location ?? '',
     listed_price: item.listed_price != null ? String(item.listed_price) : '',
     listed_platform: item.listed_platform ?? '',
     sold_price: item.sold_price != null ? String(item.sold_price) : '',
@@ -48,7 +51,7 @@ function itemToDraft(item: InventoryItem): DraftItem {
 function productName(item: InventoryItem, ordersById: Map<string, Order>): string {
   if (item.product_text) return item.product_text
   const order = item.order_id ? ordersById.get(item.order_id) : undefined
-  return order?.raw_product_text ?? 'Unknown item'
+  return order?.product_name ?? order?.raw_product_text ?? 'Unknown item'
 }
 
 function fromOrderLabel(item: InventoryItem, ordersById: Map<string, Order>): string {
@@ -74,6 +77,7 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
     () => (localStorage.getItem('cache_inventory_view') as ViewMode) || 'grouped'
   )
   const [groups, setGroups] = useState<ProductGroup[]>([])
+  const [viewingProductKey, setViewingProductKey] = useState<string | null>(null)
 
   function changeView(next: ViewMode): void {
     setView(next)
@@ -81,6 +85,7 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
     // Checkboxes only exist in the flat view; leaving a stale selection
     // behind would show a bulk bar with no way to clear it.
     setCheckedIds(new Set())
+    setViewingProductKey(null)
   }
 
   /** A unit's product comes from itself when standalone, otherwise from its
@@ -150,6 +155,7 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
       const updated = await api.inventory.update(selectedId, {
         status: draft.status,
         cost_basis: draft.cost_basis ? Number(draft.cost_basis) : null,
+        location: draft.location || null,
         listed_price: draft.listed_price ? Number(draft.listed_price) : null,
         listed_platform: draft.listed_platform || null,
         sold_price: draft.sold_price ? Number(draft.sold_price) : null,
@@ -328,13 +334,33 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
                 }
               />
             </>
+          ) : view === 'grouped' && viewingProductKey ? (
+            <ProductDetail
+              group={
+                groups.find((g) => (g.product_id ?? '__unmatched__') === viewingProductKey) ?? {
+                  product_id: null,
+                  name: 'Unmatched',
+                  total_units: 0,
+                  in_hand: 0,
+                  listed: 0,
+                  sold: 0,
+                  total_cost_basis: 0,
+                  total_sold_revenue: 0,
+                  awaiting_payment: 0,
+                  avg_sale_price: null,
+                  image_url: null
+                }
+              }
+              units={items.filter((i) => (productIdFor(i) ?? '__unmatched__') === viewingProductKey)}
+              ordersById={ordersById}
+              onBack={() => setViewingProductKey(null)}
+              onSelectUnit={selectItem}
+              selectedId={selectedId}
+            />
           ) : view === 'grouped' ? (
             <GroupedInventory
               groups={groups}
-              items={items}
-              productIdFor={productIdFor}
-              onSelectItem={selectItem}
-              selectedId={selectedId}
+              onOpenProduct={(group) => setViewingProductKey(group.product_id ?? '__unmatched__')}
               onChanged={load}
             />
           ) : (
@@ -422,6 +448,10 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
                 </select>
               </Field>
             </div>
+
+            <Field label="Location">
+              <input className="field-input" value={draft.location} onChange={(e) => updateDraft('location', e.target.value)} placeholder="Closet A, Storage bin 3…" />
+            </Field>
 
             {draft.status === 'listed' && (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>

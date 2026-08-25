@@ -29,6 +29,15 @@ def create_order(order_in: schemas.OrderCreate, db: Session = Depends(get_db)):
         .first()
     )
     if existing:
+        # A repost is otherwise a no-op, but backfilling a field that's
+        # currently NULL is safe and worth doing: it's exactly how a
+        # thumbnail_url capture added after the order was first ingested
+        # reaches history on the next resync. Anything the user could have
+        # edited (status, shipping, notes) is deliberately never touched
+        # here -- only fields that started empty and stay retailer/parser
+        # -owned move.
+        if existing.thumbnail_url is None and order_in.thumbnail_url:
+            existing.thumbnail_url = order_in.thumbnail_url
         db.commit()
         return existing
 

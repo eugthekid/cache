@@ -113,8 +113,10 @@ function GroupedOrders({ groups, selectedId, onSelect }: GroupedOrdersProps): Re
       <thead>
         <tr>
           <th style={{ paddingTop: 16, width: 26 }} />
-          <th style={{ paddingTop: 16 }}>Order</th>
+          <th style={{ paddingTop: 16 }}>Product</th>
+          <th style={{ paddingTop: 16 }}>Order #</th>
           <th style={{ paddingTop: 16 }}>Retailer</th>
+          <th style={{ paddingTop: 16 }}>Profile</th>
           <th style={{ paddingTop: 16, textAlign: 'right' }}>Total</th>
           <th style={{ paddingTop: 16, textAlign: 'right' }}>Items</th>
           <th style={{ paddingTop: 16 }}>Status</th>
@@ -132,9 +134,10 @@ function GroupedOrders({ groups, selectedId, onSelect }: GroupedOrdersProps): Re
             <tr
               key={key}
               className="row"
-              // Clicking the row opens the order; only the chevron expands,
-              // so a single-line order is still one click to edit.
-              onClick={() => onSelect(head)}
+              // Multi-line orders expand to show their products on a row
+              // click; a single-line order has nothing extra to reveal,
+              // so it goes straight to edit instead.
+              onClick={() => (isMulti ? toggle(key) : onSelect(head))}
               style={{
                 cursor: 'pointer',
                 background: selected
@@ -144,28 +147,20 @@ function GroupedOrders({ groups, selectedId, onSelect }: GroupedOrdersProps): Re
                     : undefined
               }}
             >
-              <td
-                style={{ color: 'var(--text-faint)', fontSize: 11 }}
-                onClick={(e) => {
-                  if (!isMulti) return
-                  e.stopPropagation()
-                  toggle(key)
-                }}
-              >
-                {isMulti ? (isOpen ? '▾' : '▸') : ''}
-              </td>
+              <td style={{ color: 'var(--text-faint)', fontSize: 11 }}>{isMulti ? (isOpen ? '▾' : '▸') : ''}</td>
               <td>
-                {group.orderNumber ? (
-                  <span className="num" style={{ fontSize: 12.5 }}>{group.orderNumber}</span>
-                ) : (
-                  <span style={{ fontSize: 12.5 }}>{head.raw_product_text ?? 'Unknown item'}</span>
-                )}
+                <span style={{ fontSize: 12.5, fontWeight: isMulti ? 600 : 400 }}>
+                  {isMulti ? `${group.lines.length} products` : (head.product_name ?? head.raw_product_text ?? 'Unknown item')}
+                </span>
                 <div className="num" style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>
-                  {group.orderNumber === null && 'no order number · '}
                   {head.purchased_at ? new Date(head.purchased_at).toLocaleDateString() : 'no date'}
                 </div>
               </td>
+              <td className="num" style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>
+                {group.orderNumber ?? 'N/A'}
+              </td>
               <td style={{ color: 'var(--text-secondary)', fontSize: 12.5 }}>{head.retailer ?? '—'}</td>
+              <td style={{ color: 'var(--text-secondary)', fontSize: 12.5 }}>{head.profile ?? '—'}</td>
               <td className="num" style={{ textAlign: 'right', fontWeight: isMulti ? 600 : 400 }}>
                 {group.hasPrice ? money(group.total) : <span style={{ color: 'var(--text-faint)' }}>—</span>}
               </td>
@@ -195,8 +190,10 @@ function GroupedOrders({ groups, selectedId, onSelect }: GroupedOrdersProps): Re
                 >
                   <td />
                   <td style={{ paddingLeft: 26, color: 'var(--text-secondary)', fontSize: 12 }}>
-                    {line.raw_product_text ?? 'Unknown item'}
+                    {line.product_name ?? line.raw_product_text ?? 'Unknown item'}
                   </td>
+                  <td />
+                  <td />
                   <td />
                   <td className="num" style={{ textAlign: 'right', color: 'var(--text-secondary)' }}>
                     {line.unit_price != null ? money(line.unit_price * (line.quantity ?? 1)) : '—'}

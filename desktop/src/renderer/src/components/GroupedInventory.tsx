@@ -1,15 +1,14 @@
 import { useState } from 'react'
-import { api, type InventoryItem, type ProductGroup } from '../api/client'
-import StatusPill from '../components/StatusPill'
+import { api, type ProductGroup } from '../api/client'
 
 interface GroupedInventoryProps {
   groups: ProductGroup[]
-  items: InventoryItem[]
-  /** Resolves a unit to its product, whether it carries product_id itself
-   * (standalone/imported stock) or inherits it from its order. */
-  productIdFor: (item: InventoryItem) => string | null
-  onSelectItem: (item: InventoryItem) => void
-  selectedId: string | null
+  /** Opens the full per-unit detail screen for this product -- see
+   * ProductDetail.tsx. Units aren't shown inline here any more: a product
+   * can hold 90+ units, and listing them all in this table was both
+   * unreadable and (per user feedback) not the right shape for what a
+   * unit actually needs to show (order #, location, sale price...). */
+  onOpenProduct: (group: ProductGroup) => void
   onChanged: () => void
 }
 
@@ -17,24 +16,11 @@ function money(n: number): string {
   return `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
-/** Inventory rolled up to one row per product, expandable to the individual
- * units. This is the view that answers "how many of these do I have?"
- * without the user counting identical-looking rows by eye. */
-function GroupedInventory({
-  groups,
-  items,
-  productIdFor,
-  onSelectItem,
-  selectedId,
-  onChanged
-}: GroupedInventoryProps): React.JSX.Element {
-  const [expanded, setExpanded] = useState<string | null>(null)
+/** Inventory rolled up to one row per product. Click a row to drill into
+ * its individual units on their own screen. */
+function GroupedInventory({ groups, onOpenProduct, onChanged }: GroupedInventoryProps): React.JSX.Element {
   const [renaming, setRenaming] = useState<string | null>(null)
   const [draftName, setDraftName] = useState('')
-
-  function toggle(key: string): void {
-    setExpanded((prev) => (prev === key ? null : key))
-  }
 
   async function saveName(productId: string): Promise<void> {
     const name = draftName.trim()
@@ -48,30 +34,25 @@ function GroupedInventory({
     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
       <thead>
         <tr>
-          <th style={{ paddingTop: 16, width: 26 }} />
           <th style={{ paddingTop: 16, width: 40 }} />
           <th style={{ paddingTop: 16 }}>Product</th>
           <th style={{ paddingTop: 16 }}>Units</th>
           <th style={{ paddingTop: 16 }}>In hand</th>
           <th style={{ paddingTop: 16 }}>Sold</th>
+          <th style={{ paddingTop: 16 }}>Avg. sale price</th>
           <th style={{ paddingTop: 16 }}>Cost basis</th>
         </tr>
       </thead>
       <tbody>
         {groups.map((group) => {
           const key = group.product_id ?? '__unmatched__'
-          const isOpen = expanded === key
-          const groupItems = isOpen
-            ? items.filter((i) => (productIdFor(i) ?? '__unmatched__') === key)
-            : []
-          return [
+          return (
             <tr
               key={key}
               className="row"
-              onClick={() => toggle(key)}
-              style={{ cursor: 'pointer', background: isOpen ? 'oklch(90% 0.02 250 / 0.06)' : undefined }}
+              onClick={() => onOpenProduct(group)}
+              style={{ cursor: 'pointer' }}
             >
-              <td style={{ color: 'var(--text-faint)', fontSize: 11 }}>{isOpen ? '▾' : '▸'}</td>
               <td>
                 {group.image_url ? (
                   <img
@@ -83,7 +64,7 @@ function GroupedInventory({
                   <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--field-bg)' }} />
                 )}
               </td>
-              <td style={{ fontWeight: 500 }} onClick={(e) => isOpen && e.stopPropagation()}>
+              <td style={{ fontWeight: 500 }}>
                 {renaming === group.product_id ? (
                   <input
                     className="field-input"
@@ -119,42 +100,12 @@ function GroupedInventory({
               <td className="num" style={{ fontWeight: 600 }}>{group.total_units}</td>
               <td className="num" style={{ color: 'var(--text-secondary)' }}>{group.in_hand}</td>
               <td className="num" style={{ color: 'var(--text-secondary)' }}>{group.sold}</td>
+              <td className="num" style={{ color: 'var(--text-secondary)' }}>
+                {group.avg_sale_price != null ? money(group.avg_sale_price) : '—'}
+              </td>
               <td className="num">{money(group.total_cost_basis)}</td>
-            </tr>,
-            ...groupItems.map((item) => (
-              <tr
-                key={item.id}
-                className="row"
-                onClick={() => onSelectItem(item)}
-                style={{
-                  cursor: 'pointer',
-                  background:
-                    item.id === selectedId
-                      ? 'linear-gradient(90deg, oklch(29% 0.06 215), oklch(27% 0.06 292 / 0.6))'
-                      : 'oklch(15% 0.012 255 / 0.35)'
-                }}
-              >
-                <td />
-                <td />
-                <td style={{ paddingLeft: 26, color: 'var(--text-secondary)', fontSize: 12 }}>
-                  unit {item.unit_index ?? '—'}
-                  {item.notes ? ` · ${item.notes}` : ''}
-                </td>
-                <td />
-                <td colSpan={2}>
-                  <StatusPill status={item.status} />
-                  {item.status === 'sold' && item.money_received_at == null && (
-                    <span className="pill pill-warn" style={{ marginLeft: 6 }}>
-                      unpaid
-                    </span>
-                  )}
-                </td>
-                <td className="num" style={{ color: 'var(--text-secondary)' }}>
-                  {item.cost_basis != null ? money(item.cost_basis) : '—'}
-                </td>
-              </tr>
-            ))
-          ]
+            </tr>
+          )
         })}
       </tbody>
     </table>

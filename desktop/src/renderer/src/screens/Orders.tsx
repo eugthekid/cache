@@ -399,6 +399,7 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
                     <th style={{ paddingTop: 16, width: 32 }} />
                     <th style={{ paddingTop: 16 }}>Product</th>
                     <th style={{ paddingTop: 16 }}>Site</th>
+                    <th style={{ paddingTop: 16 }}>Profile</th>
                     <th style={{ paddingTop: 16 }}>Price</th>
                     <th style={{ paddingTop: 16 }}>Qty</th>
                     <th style={{ paddingTop: 16 }}>Status</th>
@@ -444,6 +445,7 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
                   <th style={{ paddingTop: 16 }}>Product</th>
                   <th style={{ paddingTop: 16 }}>Order #</th>
                   <th style={{ paddingTop: 16 }}>Retailer</th>
+                  <th style={{ paddingTop: 16 }}>Profile</th>
                   <th style={{ paddingTop: 16 }}>Price</th>
                   <th style={{ paddingTop: 16 }}>Qty</th>
                   <th style={{ paddingTop: 16 }}>Status</th>
@@ -464,11 +466,12 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
                     <td onClick={(e) => e.stopPropagation()}>
                       <input type="checkbox" checked={checkedIds.has(order.id)} onChange={() => toggleChecked(order.id)} />
                     </td>
-                    <td style={{ fontWeight: 500 }}>{order.raw_product_text ?? '—'}</td>
+                    <td style={{ fontWeight: 500 }}>{order.product_name ?? order.raw_product_text ?? '—'}</td>
                     <td className="num" style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                      {order.order_number || '—'}
+                      {order.order_number || 'N/A'}
                     </td>
                     <td style={{ color: 'var(--text-secondary)' }}>{order.retailer ?? order.site ?? '—'}</td>
+                    <td style={{ color: 'var(--text-secondary)' }}>{order.profile ?? '—'}</td>
                     <td className="num">{order.unit_price != null ? `$${order.unit_price.toFixed(2)}` : '—'}</td>
                     <td className="num">{order.quantity ?? '—'}</td>
                     <td>

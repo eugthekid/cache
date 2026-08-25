@@ -111,6 +111,7 @@ def grouped_inventory(db: Session = Depends(get_db)):
                 "total_cost_basis": 0.0,
                 "total_sold_revenue": 0.0,
                 "awaiting_payment": 0,
+                "_priced_sale_count": 0,  # units sold WITH a recorded price
             },
         )
         group["total_units"] += 1
@@ -118,13 +119,21 @@ def grouped_inventory(db: Session = Depends(get_db)):
             group[item.status] += 1
         group["total_cost_basis"] += item.cost_basis or 0
         if item.status == "sold":
-            group["total_sold_revenue"] += item.sold_price or 0
             if item.money_received_at is None:
                 group["awaiting_payment"] += 1
+            if item.sold_price is not None:
+                group["total_sold_revenue"] += item.sold_price
+                group["_priced_sale_count"] += 1
+
+    results = []
+    for g in groups.values():
+        priced = g.pop("_priced_sale_count")
+        g["avg_sale_price"] = g["total_sold_revenue"] / priced if priced else None
+        results.append(g)
 
     return [
         schemas.ProductGroup(**g)
-        for g in sorted(groups.values(), key=lambda g: (-g["total_units"], g["name"] or ""))
+        for g in sorted(results, key=lambda g: (-g["total_units"], g["name"] or ""))
     ]
 
 
