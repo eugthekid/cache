@@ -29,9 +29,10 @@ import urllib.error
 import urllib.request
 from typing import Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app import models
+from app import models, products
 
 BASE_URL = "https://openapi.tcgtracking.com/tcgapi/v1"
 # The API 403s Python's default urllib user-agent but accepts a normal
@@ -182,6 +183,55 @@ def _token_similarity(a: set[str], b: set[str]) -> float:
     return len(a & b) / len(a | b)
 
 
+def _merge_shared_catalog_matches(db: Session, user_id: str) -> int:
+    """
+    Folds together any products that both ended up CONFIRMED against the
+    same catalog item.
+
+    Found live in real data: two Products with different normalized_key
+    (one carrying a "Mega Evolution" prefix the other lacked) each matched
+    the same catalog product independently, both got renamed to the
+    identical display name, and sat as two separate rows in the grouped
+    Inventory view -- reading as a plain duplicate even though nothing
+    about the matching logic was wrong, it just never occurred to either
+    match that the OTHER product existed.
+
+    Merging on a SHARED CONFIRMED CATALOG MATCH is safe in the way the
+    order-number merge in products.py had to be guarded against being --
+    two products matching the exact same external catalog entry is
+    strictly stronger evidence than a coincidence could produce.
+    """
+    confirmed = (
+        db.query(models.Product)
+        .filter_by(user_id=user_id, catalog_match_status="confirmed")
+        .filter(models.Product.catalog_product_id.isnot(None))
+        .all()
+    )
+    by_catalog_id: dict[str, list[models.Product]] = {}
+    for p in confirmed:
+        by_catalog_id.setdefault(p.catalog_product_id, []).append(p)
+
+    order_counts = dict(
+        db.query(models.Order.product_id, func.count(models.Order.id))
+        .group_by(models.Order.product_id)
+        .all()
+    )
+
+    merged = 0
+    for group in by_catalog_id.values():
+        if len(group) < 2:
+            continue
+        # Keep whichever already has the most orders attached, so the
+        # surviving row is the one the user is more likely to already
+        # recognize -- id as a tiebreaker only for determinism.
+        group.sort(key=lambda p: (-order_counts.get(p.id, 0), p.id))
+        target = group[0]
+        for extra in group[1:]:
+            if products.merge_products(db, user_id, source_id=extra.id, target_id=target.id):
+                merged += 1
+    return merged
+
+
 def find_catalog_matches(db: Session, user_id: str) -> dict:
     """
     Matches every unresolved Product against the local catalog cache.
@@ -242,7 +292,10 @@ def find_catalog_matches(db: Session, user_id: str) -> dict:
             unmatched += 1
 
     db.commit()
+    merged = _merge_shared_catalog_matches(db, user_id)
+
     return {
+        "duplicates_merged": merged,
         "auto_confirmed": auto_confirmed,
         "suggested": suggested,
         "unmatched": unmatched,

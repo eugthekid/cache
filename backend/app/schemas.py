@@ -270,6 +270,7 @@ class CatalogSyncResult(BaseModel):
 
 
 class CatalogMatchResult(BaseModel):
+    duplicates_merged: int
     auto_confirmed: int
     suggested: int
     unmatched: int

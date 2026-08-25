@@ -292,7 +292,16 @@ def parse_message(message: Any) -> Optional[dict[str, Any]]:
     # (apparel, retailer exclusives). Thumbnail checked first: a few bots
     # (HayhaAIO) also set embed.image to a decorative banner, which would
     # otherwise overwrite a perfectly good product thumbnail.
+    #
+    # BUT verified against real data that HayhaAIO's embed.thumbnail is
+    # sometimes ITS OWN LOGO, not a product photo -- the exact same
+    # pbs.twimg.com URL (a Twitter *profile picture*, by that URL's own
+    # "profile_images" path segment) showed up on 4 completely different
+    # products. A real product photo is never a bot's Twitter avatar, so
+    # that host is rejected outright rather than trusted as a fallback.
     thumbnail_url = getattr(embed.thumbnail, "url", None) or getattr(embed.image, "url", None)
+    if thumbnail_url and "pbs.twimg.com/profile_images/" in thumbnail_url:
+        thumbnail_url = None
 
     fields: dict[str, Any] = {}
     extra_fields: dict[str, str] = {}

@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app import catalog, crud, models, schemas
+from app import products as products_module
 from app.database import get_db
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
@@ -79,6 +80,30 @@ def confirm_suggestion(
     catalog_product = db.query(models.CatalogProduct).filter_by(id=body.catalog_product_id).first()
     if catalog_product is None:
         raise HTTPException(status_code=404, detail="Catalog product not found")
+
+    # If another product already holds this exact catalog match confirmed,
+    # merge this one INTO it rather than creating a second confirmed row
+    # pointed at the same external item -- the auto-match pass already
+    # merges this case (see catalog._merge_shared_catalog_matches); a
+    # manual confirm needs the identical guard, or picking a candidate by
+    # hand could recreate the exact "two rows, one product" bug that fix
+    # was for.
+    existing = (
+        db.query(models.Product)
+        .filter_by(user_id=user.id, catalog_match_status="confirmed", catalog_product_id=catalog_product.id)
+        .filter(models.Product.id != product.id)
+        .first()
+    )
+    if existing:
+        products_module.merge_products(db, user.id, source_id=product.id, target_id=existing.id)
+        db.refresh(existing)
+        return schemas.ProductOut(
+            id=existing.id,
+            canonical_name=existing.canonical_name,
+            normalized_key=existing.normalized_key,
+            category=existing.category,
+            alias_count=db.query(models.ProductAlias).filter_by(product_id=existing.id).count(),
+        )
 
     product.catalog_product_id = catalog_product.id
     product.catalog_match_status = "confirmed"
