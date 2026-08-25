@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { api, type ImportMode, type ImportPreview } from '../api/client'
 
 type Step = 'upload' | 'map' | 'review'
@@ -99,7 +100,13 @@ function ImportWizard({ onClose, onImported }: ImportWizardProps): React.JSX.Ele
     }
   }
 
-  return (
+  // Portaled to document.body: this can be opened from screens like
+  // Settings, where it would otherwise render inside a .card that has
+  // backdrop-filter (see global.css) -- which the CSS spec says makes
+  // that card the containing block for "fixed" descendants instead of
+  // the viewport. See CatalogMatchReview.tsx for the concrete bug this
+  // caused there (opened off-screen, scrolled with the settings page).
+  return createPortal(
     <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ position: 'absolute', inset: 0, background: 'oklch(12% 0.012 260)', opacity: 0.7 }} onClick={result ? undefined : onClose} />
       <div className="card" style={{ position: 'relative', width: 900, maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', borderRadius: 16 }}>
@@ -297,7 +304,8 @@ function ImportWizard({ onClose, onImported }: ImportWizardProps): React.JSX.Ele
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 

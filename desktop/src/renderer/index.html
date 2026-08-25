@@ -10,10 +10,19 @@
          networking problem when it's actually CSP).
          style-src/font-src allow Google Fonts (Space Grotesk, IBM Plex) --
          googleapis.com serves the stylesheet, gstatic.com serves the actual
-         font files; both are needed, not just one. -->
+         font files; both are needed, not just one.
+         img-src allows any https: host, not a fixed list -- product
+         thumbnails come from wherever a catalog API or a Discord checkout
+         embed happens to host them (tcgtracking's CDN, Discord's own CDN,
+         a retailer's product-image CDN), and that set isn't known or
+         stable enough to enumerate. Scoped to https: only (no http:, no
+         unsafe-inline/eval anywhere else) -- an <img> load can't execute
+         script or read the page back, so the residual risk is a remote
+         host learning that Cache fetched one of its images, not a
+         security hole in the app itself. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' http://127.0.0.1:8000 http://localhost:8000"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' http://127.0.0.1:8000 http://localhost:8000"
     />
   </head>
 
