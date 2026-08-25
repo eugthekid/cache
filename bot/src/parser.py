@@ -286,6 +286,14 @@ def parse_message(message: Any) -> Optional[dict[str, Any]]:
     raw_description = (embed.description or "").lstrip("• ").strip() or None
     description_label, product_url = _extract_markdown_link(raw_description)
 
+    # Most checkout bots attach the product image as either the embed's
+    # thumbnail or its main image -- whichever is set becomes the product's
+    # fallback picture for anything a card/sneaker catalog will never carry
+    # (apparel, retailer exclusives). Thumbnail checked first: a few bots
+    # (HayhaAIO) also set embed.image to a decorative banner, which would
+    # otherwise overwrite a perfectly good product thumbnail.
+    thumbnail_url = getattr(embed.thumbnail, "url", None) or getattr(embed.image, "url", None)
+
     fields: dict[str, Any] = {}
     extra_fields: dict[str, str] = {}
     for field in embed.fields:
@@ -344,6 +352,7 @@ def parse_message(message: Any) -> Optional[dict[str, Any]]:
         "unit_price": unit_price,
         "order_number": fields.get("order_number"),
         "order_url": fields.get("order_url"),
+        "thumbnail_url": thumbnail_url,
         "purchased_at": message.created_at.isoformat(),
         "raw_json": {
             **fields,

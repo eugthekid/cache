@@ -41,6 +41,7 @@ class OrderCreate(BaseModel):
     currency: str = "USD"
     order_number: Optional[str] = None
     order_url: Optional[str] = None
+    thumbnail_url: Optional[str] = None
     # 'not_shipped' | 'label_created' | 'in_transit' | 'delivered' | 'exception'
     shipping_status: str = "not_shipped"
     tracking_number: Optional[str] = None
@@ -95,6 +96,7 @@ class OrderOut(BaseModel):
     currency: str
     order_number: Optional[str]
     order_url: Optional[str]
+    thumbnail_url: Optional[str]
     shipping_status: str
     tracking_number: Optional[str]
     ship_to_label: Optional[str]
@@ -219,6 +221,9 @@ class ProductGroup(BaseModel):
     total_cost_basis: float
     total_sold_revenue: float
     awaiting_payment: int
+    # Catalog image if matched, else the most recent order's embed
+    # thumbnail, else null -- see routers/products.py's resolution order.
+    image_url: Optional[str] = None
 
 
 class ProductMerge(BaseModel):
@@ -244,6 +249,43 @@ class ProductRebuildResult(BaseModel):
     items_resolved: int
     products: int
     suggestions: int
+
+
+class CatalogSyncRequest(BaseModel):
+    category: str  # 'pokemon' | 'onepiece'
+
+
+class CatalogSyncResult(BaseModel):
+    sets: int
+    sets_failed: int
+    products_upserted: int
+
+
+class CatalogMatchResult(BaseModel):
+    auto_confirmed: int
+    suggested: int
+    unmatched: int
+
+
+class CatalogSuggestion(BaseModel):
+    product_id: str
+    our_name: str
+    candidate_id: str
+    candidate_name: str
+    candidate_image_url: Optional[str] = None
+    candidate_set: Optional[str] = None
+
+
+class CatalogCandidate(BaseModel):
+    id: str
+    name: str
+    image_url: Optional[str] = None
+    set_name: Optional[str] = None
+    score: float
+
+
+class CatalogConfirm(BaseModel):
+    catalog_product_id: str
 
 
 class SyncSourceStatus(BaseModel):

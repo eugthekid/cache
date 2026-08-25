@@ -134,6 +134,14 @@ class Order(Base):
     order_number: Mapped[str | None] = mapped_column(default=None)
     order_url: Mapped[str | None] = mapped_column(default=None)
 
+    # The checkout embed's own product thumbnail, when the bot's parser
+    # captured one. Fallback source of a product image for anything a
+    # catalog will never carry -- sneakers, apparel, Pokemon Center
+    # exclusives -- since it arrives already attached to the exact item
+    # bought, with no matching step at all. See products/routers.py's
+    # image resolution: catalog match first, this second.
+    thumbnail_url: Mapped[str | None] = mapped_column(default=None)
+
     # Deliberately separate from `status`: a checkout can succeed while the
     # package is still in transit, and a failed/cancelled order simply never
     # progresses past 'not_shipped' -- one combined enum can't represent
@@ -296,6 +304,31 @@ class IngestedMessage(Base):
     dismissed_at: Mapped[datetime | None] = mapped_column(default=None)
 
 
+class CatalogProduct(Base):
+    """
+    One row per product in an external catalog (currently the free,
+    keyless tcgtracking.com API -- see app/catalog.py). Synced and cached
+    locally rather than queried live: the source rate-limits (observed
+    failures pulling all 285 Pokemon sets at speed) and has no documented
+    uptime guarantee, so matching must keep working even if it's briefly
+    down or disappears entirely.
+    """
+    __tablename__ = "catalog_products"
+    __table_args__ = (
+        UniqueConstraint("source", "external_id", name="uq_catalog_source_external"),
+    )
+
+    id: Mapped[str] = mapped_column(primary_key=True, default=_uuid)
+    source: Mapped[str] = mapped_column(default="tcgtracking")
+    external_id: Mapped[str]
+    category: Mapped[str]  # 'pokemon' | 'onepiece' | ...
+    set_name: Mapped[str | None] = mapped_column(default=None)
+    name: Mapped[str]
+    normalized_key: Mapped[str]
+    image_url: Mapped[str | None] = mapped_column(default=None)
+    synced_at: Mapped[datetime] = mapped_column(default=_now)
+
+
 class Product(Base):
     """
     The canonical identity of a thing you buy and sell -- what makes "I hold
@@ -330,6 +363,19 @@ class Product(Base):
 
     category: Mapped[str | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(default=_now)
+
+    # Catalog match state -- 'none' | 'suggested' | 'confirmed' | 'rejected'.
+    # 'confirmed' covers BOTH a deterministic exact match (applied
+    # automatically -- see catalog.py's real-data verification: over-eager
+    # auto-merge already burned us once in products.py, so only an EXACT
+    # normalized match auto-applies here too) and a fuzzy suggestion the
+    # user approved by hand. 'rejected' means a specific catalog_product_id
+    # was shown and declined, so the matcher must not re-suggest it.
+    catalog_match_status: Mapped[str] = mapped_column(default="none")
+    catalog_product_id: Mapped[str | None] = mapped_column(
+        ForeignKey("catalog_products.id"), default=None
+    )
+    catalog_rejected_id: Mapped[str | None] = mapped_column(default=None)
 
     aliases: Mapped[list["ProductAlias"]] = relationship(back_populates="product")
 

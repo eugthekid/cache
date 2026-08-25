@@ -49,6 +49,7 @@ function GroupedInventory({
       <thead>
         <tr>
           <th style={{ paddingTop: 16, width: 26 }} />
+          <th style={{ paddingTop: 16, width: 40 }} />
           <th style={{ paddingTop: 16 }}>Product</th>
           <th style={{ paddingTop: 16 }}>Units</th>
           <th style={{ paddingTop: 16 }}>In hand</th>
@@ -71,6 +72,17 @@ function GroupedInventory({
               style={{ cursor: 'pointer', background: isOpen ? 'oklch(90% 0.02 250 / 0.06)' : undefined }}
             >
               <td style={{ color: 'var(--text-faint)', fontSize: 11 }}>{isOpen ? '▾' : '▸'}</td>
+              <td>
+                {group.image_url ? (
+                  <img
+                    src={group.image_url}
+                    alt=""
+                    style={{ width: 28, height: 28, objectFit: 'contain', borderRadius: 6, background: 'var(--field-bg)' }}
+                  />
+                ) : (
+                  <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--field-bg)' }} />
+                )}
+              </td>
               <td style={{ fontWeight: 500 }} onClick={(e) => isOpen && e.stopPropagation()}>
                 {renaming === group.product_id ? (
                   <input
@@ -122,6 +134,7 @@ function GroupedInventory({
                       : 'oklch(15% 0.012 255 / 0.35)'
                 }}
               >
+                <td />
                 <td />
                 <td style={{ paddingLeft: 26, color: 'var(--text-secondary)', fontSize: 12 }}>
                   unit {item.unit_index ?? '—'}

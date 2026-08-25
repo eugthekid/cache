@@ -67,10 +67,28 @@ def grouped_inventory(db: Session = Depends(get_db)):
         .all()
     )
 
-    names = {
-        p.id: p.canonical_name
-        for p in db.query(models.Product).filter_by(user_id=user.id).all()
+    all_products = db.query(models.Product).filter_by(user_id=user.id).all()
+    names = {p.id: p.canonical_name for p in all_products}
+
+    catalog_images = dict(
+        db.query(models.CatalogProduct.id, models.CatalogProduct.image_url)
+    )
+    # Product -> catalog image, for anything actually matched.
+    product_catalog_image = {
+        p.id: catalog_images.get(p.catalog_product_id)
+        for p in all_products
+        if p.catalog_match_status == "confirmed" and p.catalog_product_id
     }
+    # Fallback: the most recent embed thumbnail among each product's own
+    # orders -- covers everything a card catalog never will (sneakers,
+    # apparel, Pokemon Center exclusives). Latest first() per product_id
+    # via ORDER BY, so ties resolve to the most recent purchase.
+    thumbnails = dict(
+        db.query(models.Order.product_id, models.Order.thumbnail_url)
+        .filter(models.Order.product_id.isnot(None), models.Order.thumbnail_url.isnot(None))
+        .order_by(models.Order.purchased_at.desc())
+        .all()
+    )
 
     groups: dict[str, dict] = {}
     for item, order in items:
@@ -81,6 +99,11 @@ def grouped_inventory(db: Session = Depends(get_db)):
             {
                 "product_id": product_id,
                 "name": names.get(product_id) if product_id else "Unmatched",
+                "image_url": (
+                    product_catalog_image.get(product_id) or thumbnails.get(product_id)
+                    if product_id
+                    else None
+                ),
                 "total_units": 0,
                 "in_hand": 0,
                 "listed": 0,

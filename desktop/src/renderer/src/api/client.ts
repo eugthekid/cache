@@ -118,6 +118,7 @@ export interface Order {
   profile: string | null
   /** Normalized retailer derived from `site` (see backend retailers.py). */
   retailer: string | null
+  thumbnail_url: string | null
   site: string | null
   module: string | null
   category: string | null
@@ -284,6 +285,36 @@ export interface ProductGroup {
   total_cost_basis: number
   total_sold_revenue: number
   awaiting_payment: number
+  image_url: string | null
+}
+
+export interface CatalogSyncResult {
+  sets: number
+  sets_failed: number
+  products_upserted: number
+}
+
+export interface CatalogMatchResult {
+  auto_confirmed: number
+  suggested: number
+  unmatched: number
+}
+
+export interface CatalogSuggestion {
+  product_id: string
+  our_name: string
+  candidate_id: string
+  candidate_name: string
+  candidate_image_url: string | null
+  candidate_set: string | null
+}
+
+export interface CatalogCandidate {
+  id: string
+  name: string
+  image_url: string | null
+  set_name: string | null
+  score: number
 }
 
 export interface MergeSuggestion {
@@ -467,6 +498,21 @@ export const api = {
   sync: {
     status: () => get<SyncStatus>('/sync/status'),
     request: (full = true) => post<SyncStatus>('/sync/request', { full })
+  },
+
+  catalog: {
+    sync: (category: string) =>
+      post<CatalogSyncResult>('/catalog/sync', { category }),
+    match: () => post<CatalogMatchResult>('/catalog/match'),
+    suggestions: () => get<CatalogSuggestion[]>('/catalog/suggestions'),
+    candidates: (productId: string) =>
+      get<CatalogCandidate[]>(`/catalog/suggestions/${productId}/candidates`),
+    confirm: (productId: string, catalogProductId: string) =>
+      post<Product>(`/catalog/suggestions/${productId}/confirm`, {
+        catalog_product_id: catalogProductId
+      }),
+    reject: (productId: string) =>
+      post<BulkResult>(`/catalog/suggestions/${productId}/reject`)
   },
 
   botService: {

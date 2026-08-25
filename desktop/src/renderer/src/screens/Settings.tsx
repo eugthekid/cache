@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, type DiscordStatus, type LicenseStatus } from '../api/client'
 import ImportWizard from '../components/ImportWizard'
 import RebuildDeleted from '../components/RebuildDeleted'
+import CatalogMatchControl from '../components/CatalogMatchControl'
 import ErrorState from '../components/ErrorState'
 import DiscordConnect from '../components/DiscordConnect'
 import { Skel } from '../components/Skeleton'
@@ -193,6 +194,11 @@ function Settings(): React.JSX.Element {
           />
           <input ref={restoreInputRef} type="file" accept=".cache" style={{ display: 'none' }} onChange={handleRestoreFile} />
           <RebuildDeleted />
+        </div>
+
+        <div className="card" style={{ padding: '22px 26px', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Product matching</div>
+          <CatalogMatchControl />
         </div>
 
         <div className="card" style={{ padding: '22px 26px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app import crud
 from app.database import get_db
-from app.routers import backup, bot_service, dashboard, discord, inventory, license, orders, products, sources, sync
+from app.routers import backup, bot_service, catalog, dashboard, discord, inventory, license, orders, products, sources, sync
 from app.routers import import_ as import_router
 from app.routers import settings as settings_router
 
@@ -41,6 +41,7 @@ app.include_router(import_router.router)
 app.include_router(discord.router)
 app.include_router(sync.router)
 app.include_router(bot_service.router)
+app.include_router(catalog.router)
 app.include_router(products.router)
 
 
