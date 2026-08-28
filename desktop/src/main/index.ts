@@ -2,6 +2,7 @@ import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import { ensureBackendRunning } from './backend'
 
 function createWindow(): void {
   // Create the browser window.
@@ -40,7 +41,7 @@ function createWindow(): void {
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.cache.app')
 
@@ -53,6 +54,21 @@ app.whenReady().then(() => {
 
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
+
+  // Start (or wait for) the backend BEFORE the window exists. The
+  // renderer fetches on mount, so showing it first would guarantee a
+  // burst of failed requests and an "offline" error state on every cold
+  // launch -- the user would see a broken app that fixes itself, which
+  // reads as a bug rather than as loading.
+  try {
+    await ensureBackendRunning()
+  } catch (err) {
+    // Deliberately non-fatal: the window still opens and the renderer's
+    // own error state ("Can't reach the backend" + Retry) is a better
+    // thing to show than no window at all, and it recovers on its own
+    // once the backend does come up.
+    console.error('[backend] failed to start:', err)
+  }
 
   createWindow()
 

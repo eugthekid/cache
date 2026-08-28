@@ -11,6 +11,15 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
 asarUnpack:
   - resources/**
+# The frozen Python backend (built by scripts/build-backend.sh) ships
+# alongside the app rather than inside the asar archive: it's a real
+# executable that has to be spawned by path, and code inside an asar
+# isn't a real file on disk that the OS can exec.
+extraResources:
+  - from: resources/backend
+    to: backend
+    filter:
+      - '**/*'
 win:
   executableName: Cache
 nsis:

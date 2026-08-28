@@ -1,6 +1,12 @@
 node_modules
 dist
 out
+
+# Frozen Python backend staged here by scripts/build-backend.sh before
+# electron-builder picks it up. Build output, not source -- reproducible
+# from backend/backend.spec, and far too large to track.
+resources/backend/
 .DS_Store
 .eslintcache
+*.tsbuildinfo
 *.log*
