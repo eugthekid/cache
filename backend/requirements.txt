@@ -19,3 +19,8 @@ python-multipart>=0.0.12
 # Reads .xlsx files for the spreadsheet-import endpoint. CSV needs no
 # extra dependency -- Python's stdlib `csv` module handles that directly.
 openpyxl>=3.1
+
+# Freezes the backend into a standalone executable for packaging (see
+# run_backend.py + backend.spec) -- not needed to run the backend in dev,
+# only to build the bundled version Electron spawns in a packaged app.
+pyinstaller>=6.0

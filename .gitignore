@@ -12,6 +12,12 @@ bot/.venv/
 # but ignore it here too in case that ever changes.
 *.db
 
+# PyInstaller build output for the frozen backend (backend.spec) -- these
+# are huge (bundle the whole interpreter + deps) and fully reproducible
+# from run_backend.py + backend.spec, which ARE tracked.
+backend/build/
+backend/dist/
+
 # macOS clutter
 .DS_Store
 
