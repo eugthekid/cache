@@ -45,6 +45,25 @@ CATEGORY_IDS = {
     "onepiece": None,  # resolved from /categories at sync time; ids can change
 }
 
+# Display label for Product.category, keyed by CatalogProduct.category.
+CATEGORY_LABELS = {"pokemon": "Pokemon", "onepiece": "One Piece"}
+
+
+def catalog_display_name(catalog_product: "models.CatalogProduct") -> str:
+    """
+    The name a Product takes on when it's matched to this catalog entry.
+    Prefixed by game/franchise so it reads consistently in a product list
+    once non-TCG categories (sneakers, apparel) sit alongside it --
+    without it, a booster box and a pair of sneakers look like the same
+    kind of thing at a glance. Colon, not a dash, for every game -- "X: "
+    is the one shared convention across all of them.
+    """
+    if catalog_product.category == "pokemon":
+        return f"Pokémon TCG: {catalog_product.name}"
+    if catalog_product.category == "onepiece":
+        return f"One Piece: {catalog_product.name}"
+    return catalog_product.name
+
 
 def _get_json(url: str, retries: int = 3) -> dict:
     """GETs with retries and backoff -- pulling all sets in one sync hits
@@ -271,7 +290,8 @@ def find_catalog_matches(db: Session, user_id: str) -> dict:
             # "CollectionSeries 2" or the missing-space/price-in-title
             # cases. Safe here specifically because it's an EXACT
             # normalized match, not a guess.
-            product.canonical_name = exact.name
+            product.canonical_name = catalog_display_name(exact)
+            product.category = CATEGORY_LABELS.get(exact.category, exact.category)
             auto_confirmed += 1
             continue
 

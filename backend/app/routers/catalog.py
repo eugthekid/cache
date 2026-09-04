@@ -111,7 +111,8 @@ def confirm_suggestion(
     # A user-confirmed match should standardize the name too, same as an
     # auto-confirmed exact match does -- otherwise confirming just adds a
     # picture and leaves the messy retailer name in place.
-    product.canonical_name = catalog_product.name
+    product.canonical_name = catalog.catalog_display_name(catalog_product)
+    product.category = catalog.CATEGORY_LABELS.get(catalog_product.category, catalog_product.category)
     db.commit()
     db.refresh(product)
     return schemas.ProductOut(
