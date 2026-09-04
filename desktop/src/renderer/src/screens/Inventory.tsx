@@ -6,6 +6,7 @@ import ErrorState from '../components/ErrorState'
 import BulkActionBar from '../components/BulkActionBar'
 import { Skel, TableSkeleton } from '../components/Skeleton'
 import ImportWizard from '../components/ImportWizard'
+import AddInventoryItem from '../components/AddInventoryItem'
 import GroupedInventory from '../components/GroupedInventory'
 import ProductDetail from '../components/ProductDetail'
 import type { ProductGroup } from '../api/client'
@@ -14,6 +15,28 @@ import type { Screen } from '../components/NavRail'
 type ViewMode = 'units' | 'grouped'
 
 const ITEM_STATUSES: InventoryStatus[] = ['in_hand', 'listed', 'sold', 'returned', 'lost']
+
+type InventorySort = 'units_desc' | 'name_asc' | 'name_desc' | 'value_desc' | 'value_asc'
+
+const UNCATEGORIZED = '__uncategorized__'
+
+function compareGroups(a: ProductGroup, b: ProductGroup, sort: InventorySort): number {
+  switch (sort) {
+    case 'name_asc':
+      return (a.name ?? '').localeCompare(b.name ?? '')
+    case 'name_desc':
+      return (b.name ?? '').localeCompare(a.name ?? '')
+    case 'value_desc':
+      return b.total_cost_basis - a.total_cost_basis
+    case 'value_asc':
+      return a.total_cost_basis - b.total_cost_basis
+    default:
+      // Matches the backend's own default ordering (see products.py's
+      // grouped_inventory) so picking this option never visibly reorders
+      // anything the user didn't ask to reorder.
+      return b.total_units - a.total_units || (a.name ?? '').localeCompare(b.name ?? '')
+  }
+}
 
 type DraftItem = {
   status: InventoryStatus
@@ -54,6 +77,29 @@ function productName(item: InventoryItem, ordersById: Map<string, Order>): strin
   return order?.product_name ?? order?.raw_product_text ?? 'Unknown item'
 }
 
+/** Same sort options as compareGroups, applied per-unit instead of per-
+ * product -- "most units first" doesn't mean anything for a single unit,
+ * so that option just leaves the flat view in whatever order it loaded. */
+function compareItems(
+  a: InventoryItem,
+  b: InventoryItem,
+  sort: InventorySort,
+  ordersById: Map<string, Order>
+): number {
+  switch (sort) {
+    case 'name_asc':
+      return productName(a, ordersById).localeCompare(productName(b, ordersById))
+    case 'name_desc':
+      return productName(b, ordersById).localeCompare(productName(a, ordersById))
+    case 'value_desc':
+      return (b.cost_basis ?? 0) - (a.cost_basis ?? 0)
+    case 'value_asc':
+      return (a.cost_basis ?? 0) - (b.cost_basis ?? 0)
+    default:
+      return 0
+  }
+}
+
 function fromOrderLabel(item: InventoryItem, ordersById: Map<string, Order>): string {
   if (!item.order_id) return '—'
   const order = ordersById.get(item.order_id)
@@ -72,12 +118,16 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
   const [saveError, setSaveError] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [showImport, setShowImport] = useState(false)
+  const [showAddItem, setShowAddItem] = useState(false)
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set())
   const [view, setView] = useState<ViewMode>(
     () => (localStorage.getItem('cache_inventory_view') as ViewMode) || 'grouped'
   )
   const [groups, setGroups] = useState<ProductGroup[]>([])
   const [viewingProductKey, setViewingProductKey] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [categoryFilter, setCategoryFilter] = useState<string>('all')
+  const [sort, setSort] = useState<InventorySort>('units_desc')
 
   function changeView(next: ViewMode): void {
     setView(next)
@@ -95,6 +145,44 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
     const order = item.order_id ? ordersById.get(item.order_id) : undefined
     return order?.product_id ?? null
   }
+
+  /** Identifies a product-group for click-through/filtering, same as the
+   * backend's grouped_inventory: a real product_id when there is one,
+   * otherwise the normalized name -- NOT a shared '__unmatched__' bucket,
+   * which would make clicking into any one unmatched product show every
+   * other unmatched product's units mixed in with it. */
+  function groupKey(productId: string | null, name: string | null): string {
+    return productId ?? (name ?? 'unmatched').trim().toLowerCase()
+  }
+
+  // Categories come from whatever's actually in the data, not a hardcoded
+  // list -- "Pokemon"/"Sneakers"/etc. are free text the catalog matcher or
+  // the user assigns, not a fixed enum, so a new one just shows up here.
+  const categoryOptions = Array.from(
+    new Set(groups.map((g) => g.category).filter((c): c is string => !!c))
+  ).sort((a, b) => a.localeCompare(b))
+  const hasUncategorized = groups.some((g) => !g.category && g.total_units > 0)
+
+  const searchLower = search.trim().toLowerCase()
+  function matchesFilters(name: string, category: string | null): boolean {
+    if (searchLower && !name.toLowerCase().includes(searchLower)) return false
+    if (categoryFilter === 'all') return true
+    if (categoryFilter === UNCATEGORIZED) return !category
+    return category === categoryFilter
+  }
+
+  const visibleGroups = groups
+    .filter((g) => matchesFilters(g.name ?? '', g.category))
+    .sort((a, b) => compareGroups(a, b, sort))
+
+  // Units don't carry their own category -- look it up via the product
+  // they belong to, same as the grouped view does server-side.
+  const categoryByProductId = new Map(groups.map((g) => [g.product_id ?? '__unmatched__', g.category]))
+  const visibleItems = items
+    .filter((item) => matchesFilters(productName(item, ordersById), categoryByProductId.get(productIdFor(item) ?? '__unmatched__') ?? null))
+    .sort((a, b) => compareItems(a, b, sort, ordersById))
+
+  const filtersActive = search.trim() !== '' || categoryFilter !== 'all'
 
   useEffect(() => {
     load()
@@ -144,7 +232,7 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
   }
 
   function toggleAllChecked(): void {
-    setCheckedIds((prev) => (prev.size === items.length ? new Set() : new Set(items.map((i) => i.id))))
+    setCheckedIds((prev) => (prev.size === visibleItems.length ? new Set() : new Set(visibleItems.map((i) => i.id))))
   }
 
   async function save(): Promise<void> {
@@ -249,8 +337,10 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
         <div className="screen-title">Inventory</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <div className="num" style={{ fontSize: 12, color: 'var(--text-faint)' }}>
-            {items.length} unit{items.length === 1 ? '' : 's'}
-            {view === 'grouped' && groups.length > 0 && ` · ${groups.length} products`}
+            {filtersActive ? `${visibleItems.length} of ${items.length}` : items.length} unit
+            {items.length === 1 ? '' : 's'}
+            {view === 'grouped' && groups.length > 0 &&
+              ` · ${filtersActive ? `${visibleGroups.length} of ${groups.length}` : groups.length} products`}
           </div>
           <div style={{ display: 'flex', gap: 4, background: 'var(--field-bg)', border: '1px solid var(--field-border)', borderRadius: 8, padding: 3 }}>
             {(['grouped', 'units'] as ViewMode[]).map((m) => (
@@ -275,6 +365,9 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
           <button className="btn-ghost" onClick={() => setShowImport(true)}>
             IMPORT
           </button>
+          <button className="btn-primary" onClick={() => setShowAddItem(true)}>
+            + ADD ITEM
+          </button>
         </div>
       </div>
 
@@ -288,6 +381,44 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
           noun="unit"
         />
       )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <input
+          className="field-input"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search products…"
+          style={{ flex: 1, minWidth: 170, height: 30, padding: '0 12px', fontSize: 12 }}
+        />
+
+        <select
+          className="field-input"
+          value={categoryFilter}
+          onChange={(e) => setCategoryFilter(e.target.value)}
+          style={{ width: 'auto', height: 30, padding: '0 12px', fontSize: 12 }}
+        >
+          <option value="all">All categories</option>
+          {categoryOptions.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+          {hasUncategorized && <option value={UNCATEGORIZED}>Uncategorized</option>}
+        </select>
+
+        <select
+          className="field-input"
+          value={sort}
+          onChange={(e) => setSort(e.target.value as InventorySort)}
+          style={{ width: 'auto', height: 30, padding: '0 12px', fontSize: 12 }}
+        >
+          <option value="units_desc">Most units first</option>
+          <option value="name_asc">Name A–Z</option>
+          <option value="name_desc">Name Z–A</option>
+          <option value="value_desc">Value: high to low</option>
+          <option value="value_asc">Value: low to high</option>
+        </select>
+      </div>
 
       <div
         style={
@@ -337,7 +468,7 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
           ) : view === 'grouped' && viewingProductKey ? (
             <ProductDetail
               group={
-                groups.find((g) => (g.product_id ?? '__unmatched__') === viewingProductKey) ?? {
+                groups.find((g) => groupKey(g.product_id, g.name) === viewingProductKey) ?? {
                   product_id: null,
                   name: 'Unmatched',
                   total_units: 0,
@@ -348,27 +479,43 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
                   total_sold_revenue: 0,
                   awaiting_payment: 0,
                   avg_sale_price: null,
-                  image_url: null
+                  total_profit: null,
+                  image_url: null,
+                  category: null
                 }
               }
-              units={items.filter((i) => (productIdFor(i) ?? '__unmatched__') === viewingProductKey)}
+              units={items.filter((i) => groupKey(productIdFor(i), productName(i, ordersById)) === viewingProductKey)}
               ordersById={ordersById}
               onBack={() => setViewingProductKey(null)}
               onSelectUnit={selectItem}
               selectedId={selectedId}
             />
+          ) : view === 'grouped' && visibleGroups.length === 0 ? (
+            <EmptyState
+              icon={<span style={{ fontSize: 18 }}>🔍</span>}
+              iconBg="oklch(60% 0.1 215 / 0.2)"
+              title="No matches"
+              body="Nothing in your inventory matches this search and filter combination."
+            />
           ) : view === 'grouped' ? (
             <GroupedInventory
-              groups={groups}
-              onOpenProduct={(group) => setViewingProductKey(group.product_id ?? '__unmatched__')}
+              groups={visibleGroups}
+              onOpenProduct={(group) => setViewingProductKey(groupKey(group.product_id, group.name))}
               onChanged={load}
+            />
+          ) : visibleItems.length === 0 ? (
+            <EmptyState
+              icon={<span style={{ fontSize: 18 }}>🔍</span>}
+              iconBg="oklch(60% 0.1 215 / 0.2)"
+              title="No matches"
+              body="Nothing in your inventory matches this search and filter combination."
             />
           ) : (
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
                   <th style={{ paddingTop: 16, width: 32 }}>
-                    <input type="checkbox" checked={checkedIds.size === items.length} onChange={toggleAllChecked} />
+                    <input type="checkbox" checked={checkedIds.size === visibleItems.length} onChange={toggleAllChecked} />
                   </th>
                   <th style={{ paddingTop: 16 }}>Product</th>
                   <th style={{ paddingTop: 16 }}>From order</th>
@@ -378,7 +525,7 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
                 </tr>
               </thead>
               <tbody>
-                {items.map((item) => {
+                {visibleItems.map((item) => {
                   const saleText =
                     item.status === 'sold' && item.sold_price != null
                       ? `$${item.sold_price.toFixed(2)} ${item.sold_platform ?? ''}`
@@ -532,6 +679,7 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
       </div>
 
       {showImport && <ImportWizard onClose={() => setShowImport(false)} onImported={load} />}
+      {showAddItem && <AddInventoryItem onClose={() => setShowAddItem(false)} onAdded={load} />}
     </>
   )
 }

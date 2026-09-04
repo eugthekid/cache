@@ -17,6 +17,33 @@ def list_inventory(status: Optional[str] = None, db: Session = Depends(get_db)):
     return query.order_by(models.InventoryItem.created_at.desc()).all()
 
 
+@router.post("", response_model=list[schemas.InventoryItemOut])
+def create_inventory_items(body: schemas.InventoryItemCreate, db: Session = Depends(get_db)):
+    """One-off manual add -- see schemas.InventoryItemCreate. `quantity` >
+    1 spawns that many identical standalone units in one call, same as
+    typing the same spreadsheet row N times would."""
+    if body.quantity < 1:
+        raise HTTPException(status_code=400, detail="quantity must be at least 1")
+    user = crud.get_or_create_default_user(db)
+    items = [
+        models.InventoryItem(
+            user_id=user.id,
+            order_id=None,
+            status=body.status,
+            product_text=body.product_text,
+            cost_basis=body.cost_basis,
+            location=body.location,
+            notes=body.notes,
+        )
+        for _ in range(body.quantity)
+    ]
+    db.add_all(items)
+    db.commit()
+    for item in items:
+        db.refresh(item)
+    return items
+
+
 # NOTE: literal-path routes (like /summary below) must be registered BEFORE
 # any /{item_id}-style route on the same router. FastAPI/Starlette matches
 # in registration order, so a /{item_id} route defined first will greedily

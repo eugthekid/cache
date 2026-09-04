@@ -102,10 +102,37 @@ class OrderOut(BaseModel):
     thumbnail_url: Optional[str]
     shipping_status: str
     tracking_number: Optional[str]
+    carrier: Optional[str]
+    # Human label ("UPS") and a deep link to the carrier's own page --
+    # both computed from carrier/tracking_number, see Order.carrier_label
+    # and Order.tracking_url.
+    carrier_label: Optional[str]
+    tracking_url: Optional[str]
+    estimated_delivery: Optional[str]
+    tracking_detail: Optional[str]
+    tracking_checked_at: Optional[datetime]
+    shipping_alert_at: Optional[datetime]
+    shipping_alert_seen_at: Optional[datetime]
     ship_to_label: Optional[str]
     ship_to_address: Optional[str]
     purchased_at: Optional[datetime]
     created_at: datetime
+
+
+class InventoryItemCreate(BaseModel):
+    """
+    Manually add stock you already hold, one line at a time -- the
+    lightweight alternative to running the whole spreadsheet importer for
+    a single item. Produces the same shape as import's mode='unit' rows
+    (order_id=None, a free-text product_text instead of a linked Product).
+    """
+
+    product_text: str
+    quantity: int = 1
+    status: str = "in_hand"  # 'in_hand' | 'listed' | 'sold' | 'returned' | 'lost'
+    cost_basis: Optional[float] = None
+    location: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class InventoryItemUpdate(BaseModel):
@@ -229,9 +256,16 @@ class ProductGroup(BaseModel):
     # None when nothing's sold yet -- distinct from 0, which would claim
     # units sold for free.
     avg_sale_price: Optional[float] = None
+    # sum(sold_price - cost_basis) over sold, priced units only -- NOT
+    # total_sold_revenue minus total_cost_basis, which would wrongly charge
+    # this product for units still sitting in hand or listed. None under
+    # the same rule as avg_sale_price: nothing sold yet is not the same
+    # claim as "sold at a $0 profit".
+    total_profit: Optional[float] = None
     # Catalog image if matched, else the most recent order's embed
     # thumbnail, else null -- see routers/products.py's resolution order.
     image_url: Optional[str] = None
+    category: Optional[str] = None
 
 
 class ProductMerge(BaseModel):

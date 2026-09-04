@@ -69,6 +69,7 @@ def grouped_inventory(db: Session = Depends(get_db)):
 
     all_products = db.query(models.Product).filter_by(user_id=user.id).all()
     names = {p.id: p.canonical_name for p in all_products}
+    categories = {p.id: p.category for p in all_products}
 
     catalog_images = dict(
         db.query(models.CatalogProduct.id, models.CatalogProduct.image_url)
@@ -93,12 +94,22 @@ def grouped_inventory(db: Session = Depends(get_db)):
     groups: dict[str, dict] = {}
     for item, order in items:
         product_id = item.product_id or (order.product_id if order else None)
-        key = product_id or "__unmatched__"
+        # No product_id doesn't mean "no name" -- a standalone item (manual
+        # add, or a spreadsheet import's mode='unit' row) carries its own
+        # product_text, and an order that was never matched to a Product
+        # still has raw_product_text. Falling back to a single shared
+        # "Unmatched" bucket keyed by nothing would silently merge every
+        # DIFFERENT unmatched product into one indistinguishable row --
+        # keying by the text itself instead keeps them apart, same as a
+        # real product_id would.
+        fallback_name = (item.product_text or (order.raw_product_text if order else None) or "Unmatched")
+        key = product_id or f"__text__:{fallback_name.strip().lower()}"
         group = groups.setdefault(
             key,
             {
                 "product_id": product_id,
-                "name": names.get(product_id) if product_id else "Unmatched",
+                "name": names.get(product_id) if product_id else fallback_name,
+                "category": categories.get(product_id) if product_id else None,
                 "image_url": (
                     product_catalog_image.get(product_id) or thumbnails.get(product_id)
                     if product_id
@@ -112,6 +123,7 @@ def grouped_inventory(db: Session = Depends(get_db)):
                 "total_sold_revenue": 0.0,
                 "awaiting_payment": 0,
                 "_priced_sale_count": 0,  # units sold WITH a recorded price
+                "_sold_cost_basis": 0.0,  # cost basis of those SAME units, for profit
             },
         )
         group["total_units"] += 1
@@ -124,11 +136,14 @@ def grouped_inventory(db: Session = Depends(get_db)):
             if item.sold_price is not None:
                 group["total_sold_revenue"] += item.sold_price
                 group["_priced_sale_count"] += 1
+                group["_sold_cost_basis"] += item.cost_basis or 0
 
     results = []
     for g in groups.values():
         priced = g.pop("_priced_sale_count")
+        sold_cost_basis = g.pop("_sold_cost_basis")
         g["avg_sale_price"] = g["total_sold_revenue"] / priced if priced else None
+        g["total_profit"] = g["total_sold_revenue"] - sold_cost_basis if priced else None
         results.append(g)
 
     return [

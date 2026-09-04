@@ -19,12 +19,16 @@ function money(n: number): string {
 /** Inventory rolled up to one row per product. Click a row to drill into
  * its individual units on their own screen. */
 function GroupedInventory({ groups, onOpenProduct, onChanged }: GroupedInventoryProps): React.JSX.Element {
-  const [renaming, setRenaming] = useState<string | null>(null)
+  // undefined, not null: a group with no product_id (a standalone item with
+  // no linked Product) has group.product_id === null, and `renaming ===
+  // group.product_id` would read as "currently renaming" for every such
+  // row on first render if this started out null too.
+  const [renaming, setRenaming] = useState<string | undefined>(undefined)
   const [draftName, setDraftName] = useState('')
 
   async function saveName(productId: string): Promise<void> {
     const name = draftName.trim()
-    setRenaming(null)
+    setRenaming(undefined)
     if (!name) return
     await api.products.rename(productId, name)
     onChanged()
@@ -41,6 +45,7 @@ function GroupedInventory({ groups, onOpenProduct, onChanged }: GroupedInventory
           <th style={{ paddingTop: 16 }}>Sold</th>
           <th style={{ paddingTop: 16 }}>Avg. sale price</th>
           <th style={{ paddingTop: 16 }}>Cost basis</th>
+          <th style={{ paddingTop: 16 }}>Profit</th>
         </tr>
       </thead>
       <tbody>
@@ -74,7 +79,7 @@ function GroupedInventory({ groups, onOpenProduct, onChanged }: GroupedInventory
                     onBlur={() => group.product_id && saveName(group.product_id)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && group.product_id) saveName(group.product_id)
-                      if (e.key === 'Escape') setRenaming(null)
+                      if (e.key === 'Escape') setRenaming(undefined)
                     }}
                     onClick={(e) => e.stopPropagation()}
                   />
@@ -104,6 +109,19 @@ function GroupedInventory({ groups, onOpenProduct, onChanged }: GroupedInventory
                 {group.avg_sale_price != null ? money(group.avg_sale_price) : '—'}
               </td>
               <td className="num">{money(group.total_cost_basis)}</td>
+              <td
+                className="num"
+                style={{
+                  color:
+                    group.total_profit == null
+                      ? 'var(--text-secondary)'
+                      : group.total_profit >= 0
+                        ? 'var(--status-success)'
+                        : 'var(--status-failed)'
+                }}
+              >
+                {group.total_profit != null ? `${group.total_profit >= 0 ? '+' : ''}${money(group.total_profit)}` : '—'}
+              </td>
             </tr>
           )
         })}
