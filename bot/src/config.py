@@ -14,12 +14,30 @@ a new, separate bot, not a modification of that project.
 """
 
 import os
+from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+
+# NOT PROJECT_ROOT/.env -- that sits under iCloud Drive sync (this whole
+# project does, being under ~/Desktop). If iCloud has evicted it to a
+# dataless placeholder (it doesn't need the disk to be full -- it also ages
+# out rarely-touched files), a launchd-spawned process reading it hits a
+# reproducible `OSError: [Errno 11] Resource deadlock avoided`: bare
+# open()/read() doesn't go through the NSFileCoordinator dance the
+# FileProvider framework needs to materialize the file first, and the
+# kernel's synchronous wait for that deadlocks rather than transparently
+# downloading it. A foreground/interactive read doesn't reliably hit this
+# (confirmed directly: the exact same file, once warmed by one read, was
+# then read fine by a LaunchAgent-spawned process with no code change) --
+# but nothing guarantees the file stays warm, so the fix is to keep it
+# somewhere iCloud never touches. Same root cause and same fix as the
+# .venv relocation in bot/run.sh and bot_service.py's VENV_PYTHON. Recreate
+# it by copying bot/.env's contents to this path if it's ever missing.
+BOT_ENV_PATH = Path.home() / ".cache-venvs" / "cache-bot" / "bot.env"
+load_dotenv(BOT_ENV_PATH)
 
 
 def _require(name: str) -> str:

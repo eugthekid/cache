@@ -1,29 +1,36 @@
 """
 discord.py
 ----------
-Writes/reads bot/.env so Settings can offer a real "Connect Discord" form
-instead of hand-editing a file. Deliberately NOT process management -- the
-bot stays a separate, independently-run process (see run.sh) so that
-closing Cache doesn't stop checkouts from being logged. This only helps
-with the part that was actually tedious: finding and typing in the right
-IDs.
+Writes/reads the bot's env file so Settings can offer a real "Connect
+Discord" form instead of hand-editing a file. Deliberately NOT process
+management -- the bot stays a separate, independently-run process (see
+run.sh) so that closing Cache doesn't stop checkouts from being logged.
+This only helps with the part that was actually tedious: finding and
+typing in the right IDs.
 
-Works because the backend runs from this same source checkout, so
-bot/.env is just a normal sibling file on disk -- this does not (yet)
-solve writing config for a packaged, bot-less distribution.
+Works because the backend runs from this same source checkout, so this
+is just a normal sibling file on disk -- this does not (yet) solve
+writing config for a packaged, bot-less distribution.
 """
 
 import platform
 import re
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
 from app import schemas
-from app.config import PROJECT_ROOT
 
 router = APIRouter(prefix="/discord", tags=["discord"])
 
-BOT_ENV_PATH = PROJECT_ROOT / "bot" / ".env"
+# NOT PROJECT_ROOT / "bot" / ".env" -- that sits under iCloud Drive sync
+# (this whole project does, being under ~/Desktop), which caused a
+# reproducible `OSError: [Errno 11] Resource deadlock avoided` when the
+# bot's LaunchAgent read it cold (see bot/src/config.py's BOT_ENV_PATH,
+# same fix, same reasoning). Must stay the same path the bot itself loads
+# -- Settings writing to one file while the bot reads another would be a
+# silent split-brain config bug.
+BOT_ENV_PATH = Path.home() / ".cache-venvs" / "cache-bot" / "bot.env"
 _LINE_PATTERN = re.compile(r"^([A-Z_]+)=(.*)$")
 
 

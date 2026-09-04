@@ -39,7 +39,15 @@ LOG_DIR = Path.home() / "Library" / "Logs" / "Cache"
 LOG_PATH = LOG_DIR / "bot.log"
 
 BOT_DIR = Path(PROJECT_ROOT) / "bot"
-VENV_PYTHON = BOT_DIR / ".venv" / "bin" / "python"
+# NOT BOT_DIR / ".venv" -- on a dev checkout under iCloud Drive sync (e.g.
+# anything under ~/Desktop), launchd invoking a venv's python there hits a
+# reproducible `OSError: [Errno 11] Resource deadlock avoided` crash-loop
+# (site.py stalking the venv's iCloud-synced pyvenv.cfg). Same root cause
+# and same fix as backend/run.sh: a relocated venv outside iCloud's sync
+# path. Recreate it with `python3.14 -m venv ~/.cache-venvs/cache-bot &&
+# ~/.cache-venvs/cache-bot/bin/pip install -r bot/requirements.txt` if
+# it's ever missing.
+VENV_PYTHON = Path.home() / ".cache-venvs" / "cache-bot" / "bin" / "python"
 BOT_SCRIPT = BOT_DIR / "src" / "bot.py"
 
 
