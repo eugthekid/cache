@@ -150,6 +150,27 @@ class Order(Base):
     shipping_status: Mapped[str] = mapped_column(default="not_shipped")
     tracking_number: Mapped[str | None] = mapped_column(default=None)
 
+    # Derived from tracking_number's FORMAT, not from any API -- see
+    # app/tracking.py. Stored rather than recomputed on read so a later
+    # live-tracking provider can correct it (a provider knows the real
+    # carrier; a regex only knows what the number looks like).
+    # 'ups' | 'fedex' | 'usps' | 'dhl' | None when not identifiable.
+    carrier: Mapped[str | None] = mapped_column(default=None)
+    # ISO date string. Null until a live tracking provider fills it in --
+    # nothing offline can know a delivery estimate.
+    estimated_delivery: Mapped[str | None] = mapped_column(default=None)
+    # The carrier's own latest scan description ("Out for delivery"), kept
+    # verbatim: shipping_status is our coarse 5-value enum, and collapsing
+    # into it throws away the detail that makes an exception actionable.
+    tracking_detail: Mapped[str | None] = mapped_column(default=None)
+    tracking_checked_at: Mapped[datetime | None] = mapped_column(default=None)
+    # Set when shipping_status becomes 'delivered' or 'exception', cleared
+    # once the user acknowledges it. This is what drives the notification
+    # list -- a nullable timestamp rather than a bool so "when did this
+    # happen" survives, which is what an ordered feed needs.
+    shipping_alert_at: Mapped[datetime | None] = mapped_column(default=None)
+    shipping_alert_seen_at: Mapped[datetime | None] = mapped_column(default=None)
+
     # Denormalized on purpose for now: a short label a list column can show
     # ("Home", "Apt 4C") plus the full address as text. Worth its own table
     # once addresses are reused enough to be worth managing separately --
@@ -191,6 +212,23 @@ class Order(Base):
         fully derived from product_id, so it can never drift out of sync
         with a rename or a re-match."""
         return self.product.canonical_name if self.product else self.raw_product_text
+
+    @property
+    def carrier_label(self) -> str | None:
+        """'UPS' rather than 'ups'. Derived, for the same reason
+        product_name is: a stored copy would drift when carrier changes."""
+        from app.tracking import CARRIER_LABELS
+
+        return CARRIER_LABELS.get(self.carrier) if self.carrier else None
+
+    @property
+    def tracking_url(self) -> str | None:
+        """Deep link to the carrier's own tracking page, or None when the
+        carrier was never identified -- see app/tracking.py on why an
+        unknown carrier links nowhere rather than guessing."""
+        from app.tracking import tracking_url
+
+        return tracking_url(self.tracking_number, self.carrier)
 
 
 class InventoryItem(Base):

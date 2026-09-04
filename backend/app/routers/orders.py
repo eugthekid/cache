@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
-from app import crud, models, schemas
+from app import crud, models, schemas, tracking
 from app.database import get_db
 
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -127,6 +127,65 @@ def bulk_update_order_status(body: schemas.BulkOrderStatusUpdate, db: Session = 
         .filter(models.Order.id.in_(body.ids))
         .update({"status": body.status}, synchronize_session=False)
     )
+    db.commit()
+    return schemas.BulkResult(updated=updated)
+
+
+@router.get("/shipping-alerts", response_model=list[schemas.OrderOut])
+def shipping_alerts(include_seen: bool = False, db: Session = Depends(get_db)):
+    """
+    Orders whose package was just delivered or hit an exception -- the feed
+    behind the shipping notifications.
+
+    Unseen only by default: this drives a badge, and a badge that counts
+    things you've already looked at stops meaning anything. Newest first,
+    which is why shipping_alert_at is a timestamp rather than a flag.
+    """
+    query = crud.live_orders(db).filter(models.Order.shipping_alert_at.isnot(None))
+    if not include_seen:
+        query = query.filter(models.Order.shipping_alert_seen_at.is_(None))
+    return query.order_by(models.Order.shipping_alert_at.desc()).all()
+
+
+@router.post("/shipping-alerts/ack", response_model=schemas.BulkResult)
+def ack_shipping_alerts(body: schemas.BulkIds, db: Session = Depends(get_db)):
+    """
+    Marks alerts read. Empty `ids` acknowledges every outstanding one --
+    that's the "mark all as read" case, not a no-op, so it's handled
+    explicitly rather than falling through to an id filter that matches
+    nothing.
+    """
+    query = crud.live_orders(db).filter(
+        models.Order.shipping_alert_at.isnot(None),
+        models.Order.shipping_alert_seen_at.is_(None),
+    )
+    if body.ids:
+        query = query.filter(models.Order.id.in_(body.ids))
+    updated = query.update({"shipping_alert_seen_at": models._now()}, synchronize_session=False)
+    db.commit()
+    return schemas.BulkResult(updated=updated)
+
+
+@router.post("/backfill-carriers", response_model=schemas.BulkResult)
+def backfill_carriers(db: Session = Depends(get_db)):
+    """
+    Fills in `carrier` for orders whose tracking number predates carrier
+    detection. Safe to re-run: only touches rows where carrier is still
+    null, and a number whose format isn't distinctive stays null rather
+    than being guessed at (see app/tracking.py).
+    """
+    rows = (
+        crud.live_orders(db)
+        .filter(models.Order.tracking_number.isnot(None))
+        .filter(models.Order.carrier.is_(None))
+        .all()
+    )
+    updated = 0
+    for order in rows:
+        detected = tracking.detect_carrier(order.tracking_number)
+        if detected:
+            order.carrier = detected
+            updated += 1
     db.commit()
     return schemas.BulkResult(updated=updated)
 

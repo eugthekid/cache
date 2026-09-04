@@ -133,6 +133,20 @@ export interface Order {
   order_url: string | null
   shipping_status: ShippingStatus
   tracking_number: string | null
+  /** 'ups' | 'fedex' | 'usps' | 'dhl', detected from the tracking number's
+   * format -- null when the format isn't distinctive enough to be sure. */
+  carrier: string | null
+  carrier_label: string | null
+  /** Deep link to the carrier's own tracking page; null when carrier is. */
+  tracking_url: string | null
+  /** Null until a live tracking provider is configured -- nothing offline
+   * can know a delivery estimate. See backend app/tracking.py. */
+  estimated_delivery: string | null
+  tracking_detail: string | null
+  tracking_checked_at: string | null
+  /** Set when shipping_status entered 'delivered' or 'exception'. */
+  shipping_alert_at: string | null
+  shipping_alert_seen_at: string | null
   ship_to_label: string | null
   ship_to_address: string | null
   purchased_at: string | null
@@ -174,6 +188,15 @@ export type InventoryItemUpdate = Partial<
   /** Convenience toggle -- the backend turns this into a money_received_at
    * timestamp (or clears it), so the UI never has to invent a date. */
   money_received?: boolean
+}
+
+export interface InventoryItemCreate {
+  product_text: string
+  quantity?: number
+  status?: InventoryStatus
+  cost_basis?: number | null
+  location?: string | null
+  notes?: string | null
 }
 
 export interface InventorySummary {
@@ -293,7 +316,12 @@ export interface ProductGroup {
   /** null when nothing's sold yet -- distinct from 0 (which would claim
    * units sold for free). */
   avg_sale_price: number | null
+  /** sum(sold_price - cost_basis) over sold, priced units only -- null
+   * under the same rule as avg_sale_price (nothing sold yet, not "sold at
+   * a $0 profit"). */
+  total_profit: number | null
   image_url: string | null
+  category: string | null
 }
 
 export interface CatalogSyncResult {
@@ -452,6 +480,13 @@ export const api = {
     bulkSetStatus: (ids: string[], status: OrderStatus) =>
       post<BulkResult>('/orders/bulk-status', { ids, status }),
     deletedSummary: () => get<DeletedSummary>('/orders/deleted-summary'),
+    /** Delivered / exception alerts. Unseen only unless includeSeen. */
+    shippingAlerts: (includeSeen = false) =>
+      get<Order[]>(`/orders/shipping-alerts${includeSeen ? '?include_seen=true' : ''}`),
+    /** Empty `ids` acknowledges every outstanding alert (mark all read). */
+    ackShippingAlerts: (ids: string[] = []) =>
+      post<BulkResult>('/orders/shipping-alerts/ack', { ids }),
+    backfillCarriers: () => post<BulkResult>('/orders/backfill-carriers'),
     // Orders are hard deleted; rebuild re-creates them from the stored
     // ingest payloads (local -- no Discord round-trip). See backend
     // models.IngestedMessage.
@@ -462,6 +497,7 @@ export const api = {
   inventory: {
     list: (status?: InventoryStatus) =>
       get<InventoryItem[]>(`/inventory${status ? `?status=${status}` : ''}`),
+    create: (body: InventoryItemCreate) => post<InventoryItem[]>('/inventory', body),
     summary: () => get<InventorySummary>('/inventory/summary'),
     get: (id: string) => get<InventoryItem>(`/inventory/${id}`),
     update: (id: string, patchBody: InventoryItemUpdate) =>

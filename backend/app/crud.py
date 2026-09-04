@@ -10,7 +10,9 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from app import models, products, retailers
+from typing import Optional
+
+from app import models, products, retailers, tracking
 from app.models import _now
 
 
@@ -157,6 +159,11 @@ def materialize_order(db: Session, user_id: str, order_in) -> models.Order:
     if product:
         order.product_id = product.id
 
+    # Same reasoning as the two derivations above: do it at ingest so a
+    # tracking number arriving from Discord or a spreadsheet already knows
+    # its carrier, instead of only the ones typed in by hand.
+    sync_tracking_fields(order)
+
     db.add(order)
     db.commit()
     db.refresh(order)
@@ -187,14 +194,50 @@ def create_order(db: Session, user_id: str, order_in) -> models.Order:
     return materialize_order(db, user_id, order_in)
 
 
+def sync_tracking_fields(order: models.Order, previous_shipping_status: Optional[str] = None) -> None:
+    """
+    Keeps the derived shipping fields consistent with what was just set.
+
+    Two jobs, both cheap and offline:
+      * fill in `carrier` from the tracking number's format, whenever the
+        number is present and the carrier isn't already known;
+      * raise a shipping alert when the status ENTERS 'delivered' or
+        'exception'.
+
+    The alert is edge-triggered on a real transition, not on the current
+    value: re-saving an order that was already delivered shouldn't push a
+    duplicate "delivered!" notification the user has to dismiss again.
+    """
+    number = tracking.normalize_tracking_number(order.tracking_number)
+    order.tracking_number = number
+    if number and not order.carrier:
+        order.carrier = tracking.detect_carrier(number)
+    if not number:
+        order.carrier = None
+
+    alerting = {"delivered", "exception"}
+    entered = order.shipping_status in alerting and previous_shipping_status not in alerting
+    if entered:
+        order.shipping_alert_at = _now()
+        order.shipping_alert_seen_at = None
+    elif order.shipping_status not in alerting:
+        # Moved back out of an alerting state (a correction, or a package
+        # that resumed transit after an exception) -- the alert no longer
+        # describes reality, so it shouldn't keep sitting in the feed.
+        order.shipping_alert_at = None
+        order.shipping_alert_seen_at = None
+
+
 def update_order(db: Session, order: models.Order, order_in) -> models.Order:
     """
     Applies only the fields the client actually sent (exclude_unset), so a
     client that's only changing shipping_status doesn't accidentally null
     out everything else it omitted.
     """
+    previous_shipping_status = order.shipping_status
     for field, value in order_in.model_dump(exclude_unset=True).items():
         setattr(order, field, value)
+    sync_tracking_fields(order, previous_shipping_status)
     db.commit()
     db.refresh(order)
     return order
