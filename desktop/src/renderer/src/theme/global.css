@@ -197,6 +197,52 @@ select.select {
   text-transform: capitalize;
 }
 
+/* Plain <input type="checkbox"> renders with the OS's native white/light
+   control by default -- Chromium doesn't theme it, so unlike every other
+   form control here it never picked up the app's dark palette. Restyled
+   from scratch (appearance: none) rather than just tinting the checked
+   state with accent-color, which leaves the unchecked box native/white. */
+input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  border-radius: 4px;
+  border: 1px solid var(--field-border);
+  background: var(--field-bg);
+  cursor: pointer;
+  position: relative;
+  vertical-align: middle;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+input[type='checkbox']:hover {
+  border-color: oklch(85% 0.04 250 / 0.34);
+}
+input[type='checkbox']:checked {
+  background: var(--accent-gradient);
+  border-color: transparent;
+}
+/* Drawn with a rotated border rather than an image -- same "no external
+   assets" approach as the rest of this stylesheet. Color matches the text
+   this app already puts on top of the accent gradient elsewhere (e.g. the
+   active view-toggle pill), so it stays legible on either accent color. */
+input[type='checkbox']:checked::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid oklch(14% 0.01 255);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+input[type='checkbox']:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* --- status pills -------------------------------------------------------- */
 
 .pill {

@@ -152,12 +152,20 @@ class InventoryItemUpdate(BaseModel):
     sold_price: Optional[float] = None
     sold_at: Optional[datetime] = None
     sold_platform: Optional[str] = None
-    # The UI sends a checkbox; crud.update_inventory_item translates it into
-    # the stored money_received_at timestamp (or clears it). Callers that
-    # know the real payout date can send money_received_at directly instead.
-    money_received: Optional[bool] = None
-    money_received_at: Optional[datetime] = None
     notes: Optional[str] = None
+
+
+class InventoryBulkUpdate(InventoryItemUpdate):
+    """
+    Same partial-update shape as InventoryItemUpdate, applied to a whole
+    selection at once -- "adjust price/location/platform/etc. across
+    these N units" rather than "change one thing on all of them." Only
+    the fields actually set get changed, same as the single-item PATCH
+    (see crud.update_inventory_item's exclude_unset handling); a field
+    left out of the request is untouched on every unit, not blanked.
+    """
+
+    ids: list[str]
 
 
 class InventoryItemOut(BaseModel):

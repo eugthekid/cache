@@ -2,30 +2,41 @@ import { useState } from 'react'
 
 interface BulkActionBarProps<S extends string> {
   count: number
-  statusOptions: S[]
-  onSetStatus: (status: S) => Promise<void>
   onDelete: () => Promise<void>
+  /** Status dropdown + SET STATUS button. Optional -- Orders passes it
+   * (its only bulk field-change), Inventory doesn't: there, status lives
+   * at the top of the bulk-edit modal, since it decides which other
+   * fields are even relevant. */
+  statusOptions?: S[]
+  onSetStatus?: (status: S) => Promise<void>
+  /** Optional -- only Inventory offers this today, so Orders' bar (which
+   * doesn't pass it) renders without a Duplicate button at all. */
+  onDuplicate?: () => Promise<void>
+  /** Opens the multi-field bulk-edit modal. Optional for the same reason
+   * onDuplicate is. */
+  onOpenBulkEdit?: () => void
   onClear: () => void
   noun: string
 }
 
 /** The row that appears above a table once one or more checkboxes are
- * checked -- shared by Orders and Inventory since both need the same two
- * actions (set a status across the selection, or delete it). Kept generic
- * over the status union so each screen still gets its own real status
- * type in the dropdown, not a loose string. */
+ * checked. Shared by Orders and Inventory; each screen opts into the
+ * actions it supports via the optional props. */
 function BulkActionBar<S extends string>({
   count,
   statusOptions,
   onSetStatus,
   onDelete,
+  onDuplicate,
+  onOpenBulkEdit,
   onClear,
   noun
 }: BulkActionBarProps<S>): React.JSX.Element {
-  const [status, setStatus] = useState<S>(statusOptions[0])
+  const [status, setStatus] = useState<S | ''>(statusOptions?.[0] ?? '')
   const [busy, setBusy] = useState(false)
 
   async function applyStatus(): Promise<void> {
+    if (!onSetStatus || status === '') return
     setBusy(true)
     try {
       await onSetStatus(status)
@@ -39,6 +50,16 @@ function BulkActionBar<S extends string>({
     setBusy(true)
     try {
       await onDelete()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleDuplicate(): Promise<void> {
+    if (!onDuplicate) return
+    setBusy(true)
+    try {
+      await onDuplicate()
     } finally {
       setBusy(false)
     }
@@ -60,16 +81,30 @@ function BulkActionBar<S extends string>({
         {count === 1 ? '' : 's'} selected
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
-        <select className="select" style={{ width: 160 }} value={status} onChange={(e) => setStatus(e.target.value as S)} disabled={busy}>
-          {statusOptions.map((s) => (
-            <option key={s} value={s}>
-              {s.replace(/_/g, ' ')}
-            </option>
-          ))}
-        </select>
-        <button className="btn-ghost" style={{ padding: '8px 14px', fontSize: 12.5 }} onClick={applyStatus} disabled={busy}>
-          SET STATUS
-        </button>
+        {statusOptions && onSetStatus && (
+          <>
+            <select className="select" style={{ width: 160 }} value={status} onChange={(e) => setStatus(e.target.value as S)} disabled={busy}>
+              {statusOptions.map((s) => (
+                <option key={s} value={s}>
+                  {s.replace(/_/g, ' ')}
+                </option>
+              ))}
+            </select>
+            <button className="btn-ghost" style={{ padding: '8px 14px', fontSize: 12.5 }} onClick={applyStatus} disabled={busy}>
+              SET STATUS
+            </button>
+          </>
+        )}
+        {onOpenBulkEdit && (
+          <button className="btn-ghost" style={{ padding: '8px 14px', fontSize: 12.5 }} onClick={onOpenBulkEdit} disabled={busy}>
+            EDIT
+          </button>
+        )}
+        {onDuplicate && (
+          <button className="btn-ghost" style={{ padding: '8px 14px', fontSize: 12.5 }} onClick={handleDuplicate} disabled={busy}>
+            DUPLICATE
+          </button>
+        )}
         <button className="btn-danger" style={{ padding: '8px 14px', fontSize: 12.5 }} onClick={handleDelete} disabled={busy}>
           DELETE
         </button>

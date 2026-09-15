@@ -8,6 +8,13 @@ interface ProductDetailProps {
   onBack: () => void
   onSelectUnit: (item: InventoryItem) => void
   selectedId: string | null
+  /** Mass-select for bulk edit/duplicate/delete -- the same checkedIds
+   * state and ids the "All units" screen uses, since `units` here is just
+   * that same list filtered down to one product. A checkbox checked in
+   * either place is the same underlying selection. */
+  checkedIds: Set<string>
+  onToggle: (id: string) => void
+  onToggleAll: () => void
 }
 
 function money(n: number | null | undefined): string {
@@ -24,7 +31,17 @@ function money(n: number | null | undefined): string {
  * single product can hold 90+ units (verified in real data), which reads
  * as a wall of rows inline but is a normal table on its own screen.
  */
-function ProductDetail({ group, units, ordersById, onBack, onSelectUnit, selectedId }: ProductDetailProps): React.JSX.Element {
+function ProductDetail({
+  group,
+  units,
+  ordersById,
+  onBack,
+  onSelectUnit,
+  selectedId,
+  checkedIds,
+  onToggle,
+  onToggleAll
+}: ProductDetailProps): React.JSX.Element {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 4px 14px' }}>
@@ -53,13 +70,15 @@ function ProductDetail({ group, units, ordersById, onBack, onSelectUnit, selecte
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr>
+              <th style={{ paddingTop: 10, width: 32 }}>
+                <input type="checkbox" checked={units.length > 0 && checkedIds.size === units.length} onChange={onToggleAll} />
+              </th>
               <th style={{ paddingTop: 10 }}>Order #</th>
               <th style={{ paddingTop: 10 }}>Retailer</th>
               <th style={{ paddingTop: 10 }}>Location</th>
               <th style={{ paddingTop: 10 }}>Status</th>
               <th style={{ paddingTop: 10 }}>Sale price</th>
               <th style={{ paddingTop: 10 }}>Sold</th>
-              <th style={{ paddingTop: 10 }}>Paid</th>
             </tr>
           </thead>
           <tbody>
@@ -78,23 +97,18 @@ function ProductDetail({ group, units, ordersById, onBack, onSelectUnit, selecte
                         : undefined
                   }}
                 >
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <input type="checkbox" checked={checkedIds.has(unit.id)} onChange={() => onToggle(unit.id)} />
+                  </td>
                   <td className="num" style={{ fontSize: 12.5 }}>{order?.order_number ?? (unit.order_id ? 'N/A' : 'imported')}</td>
                   <td style={{ color: 'var(--text-secondary)', fontSize: 12.5 }}>{order?.retailer ?? '—'}</td>
                   <td style={{ color: 'var(--text-secondary)', fontSize: 12.5 }}>{unit.location ?? '—'}</td>
                   <td>
                     <StatusPill status={unit.status} />
-                    {unit.status === 'sold' && unit.money_received_at == null && (
-                      <span className="pill pill-warn" style={{ marginLeft: 6 }}>
-                        unpaid
-                      </span>
-                    )}
                   </td>
                   <td className="num">{unit.status === 'sold' ? money(unit.sold_price) : '—'}</td>
                   <td className="num" style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
                     {unit.sold_at ? unit.sold_at.slice(0, 10) : '—'}
-                  </td>
-                  <td className="num" style={{ fontSize: 12 }}>
-                    {unit.status === 'sold' ? (unit.money_received_at ? unit.money_received_at.slice(0, 10) : '—') : '—'}
                   </td>
                 </tr>
               )

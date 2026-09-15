@@ -116,6 +116,75 @@ def bulk_update_inventory_status(
     return schemas.BulkResult(updated=updated)
 
 
+@router.post("/bulk-edit", response_model=schemas.BulkResult)
+def bulk_edit_items(body: schemas.InventoryBulkUpdate, db: Session = Depends(get_db)):
+    """
+    Mass-adjust price/location/platform/etc. across a selection. Loops
+    and reuses crud.update_inventory_item per item -- NOT a single bulk
+    SQL UPDATE -- because that function carries a real business rule
+    (marking 'sold' without a date fills in today) that a bare column
+    assignment can't replicate. Same tradeoff already made for bulk
+    order-status (see routers/orders.py's bulk_update_order_status).
+    """
+    if not body.ids:
+        return schemas.BulkResult(updated=0)
+    patch = schemas.InventoryItemUpdate(**body.model_dump(exclude_unset=True, exclude={"ids"}))
+    items = crud.live_items(db).filter(models.InventoryItem.id.in_(body.ids)).all()
+    for item in items:
+        crud.update_inventory_item(db, item, patch)
+    return schemas.BulkResult(updated=len(items))
+
+
+@router.post("/bulk-duplicate", response_model=list[schemas.InventoryItemOut])
+def bulk_duplicate_items(body: schemas.BulkIds, db: Session = Depends(get_db)):
+    """
+    "I have another one of these" -- clones cost basis, location and notes
+    from each source unit, but deliberately NOT its status or sale fields:
+    a duplicate is fresh stock, not a copy of a completed sale, so it
+    always starts 'in_hand' with sold_price/listed_price left null even
+    when the original was sold.
+
+    Detached from the original's order (order_id always null on the
+    result) rather than pointed at the same order -- a duplicate wasn't
+    part of that purchase, and attaching it would silently inflate that
+    order's own unit count. product_id is carried forward explicitly
+    (falling back to the order's, for a unit that only has one via its
+    order) so the copy still lands in the same product group instead of
+    becoming a second "Unmatched" bucket for the same item.
+    """
+    if not body.ids:
+        return []
+    rows = (
+        crud.live_items(db)
+        .filter(models.InventoryItem.id.in_(body.ids))
+        .all()
+    )
+    order_product_ids = dict(
+        db.query(models.Order.id, models.Order.product_id).filter(
+            models.Order.id.in_({r.order_id for r in rows if r.order_id})
+        )
+    )
+    user = crud.get_or_create_default_user(db)
+    created = [
+        models.InventoryItem(
+            user_id=user.id,
+            order_id=None,
+            product_id=item.product_id or order_product_ids.get(item.order_id),
+            product_text=item.product_text,
+            status="in_hand",
+            cost_basis=item.cost_basis,
+            location=item.location,
+            notes=item.notes,
+        )
+        for item in rows
+    ]
+    db.add_all(created)
+    db.commit()
+    for item in created:
+        db.refresh(item)
+    return created
+
+
 @router.post("/restore", response_model=schemas.BulkResult)
 def restore_inventory(body: schemas.BulkIds, db: Session = Depends(get_db)):
     """Undo a delete of a STANDALONE unit (one imported directly in

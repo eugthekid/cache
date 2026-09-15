@@ -10,6 +10,12 @@ interface GroupedInventoryProps {
    * unit actually needs to show (order #, location, sale price...). */
   onOpenProduct: (group: ProductGroup) => void
   onChanged: () => void
+  /** Mass-select for bulk delete/edit/duplicate -- keyed by the same
+   * groupKey() scheme Inventory.tsx uses everywhere else a product needs
+   * an identity beyond its (possibly absent) product_id. */
+  checkedKeys: Set<string>
+  onToggle: (group: ProductGroup) => void
+  onToggleAll: () => void
 }
 
 function money(n: number): string {
@@ -18,7 +24,14 @@ function money(n: number): string {
 
 /** Inventory rolled up to one row per product. Click a row to drill into
  * its individual units on their own screen. */
-function GroupedInventory({ groups, onOpenProduct, onChanged }: GroupedInventoryProps): React.JSX.Element {
+function GroupedInventory({
+  groups,
+  onOpenProduct,
+  onChanged,
+  checkedKeys,
+  onToggle,
+  onToggleAll
+}: GroupedInventoryProps): React.JSX.Element {
   // undefined, not null: a group with no product_id (a standalone item with
   // no linked Product) has group.product_id === null, and `renaming ===
   // group.product_id` would read as "currently renaming" for every such
@@ -38,6 +51,9 @@ function GroupedInventory({ groups, onOpenProduct, onChanged }: GroupedInventory
     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
       <thead>
         <tr>
+          <th style={{ paddingTop: 16, width: 32 }}>
+            <input type="checkbox" checked={groups.length > 0 && checkedKeys.size === groups.length} onChange={onToggleAll} />
+          </th>
           <th style={{ paddingTop: 16, width: 40 }} />
           <th style={{ paddingTop: 16 }}>Product</th>
           <th style={{ paddingTop: 16 }}>Units</th>
@@ -50,7 +66,11 @@ function GroupedInventory({ groups, onOpenProduct, onChanged }: GroupedInventory
       </thead>
       <tbody>
         {groups.map((group) => {
-          const key = group.product_id ?? '__unmatched__'
+          // Matches Inventory.tsx's groupKey(): a real product_id when
+          // there is one, otherwise the normalized name -- NOT a shared
+          // '__unmatched__' bucket, which would give every unmatched
+          // product the same React key AND the same checkbox state.
+          const key = group.product_id ?? (group.name ?? 'unmatched').trim().toLowerCase()
           return (
             <tr
               key={key}
@@ -58,6 +78,9 @@ function GroupedInventory({ groups, onOpenProduct, onChanged }: GroupedInventory
               onClick={() => onOpenProduct(group)}
               style={{ cursor: 'pointer' }}
             >
+              <td onClick={(e) => e.stopPropagation()}>
+                <input type="checkbox" checked={checkedKeys.has(key)} onChange={() => onToggle(group)} />
+              </td>
               <td>
                 {group.image_url ? (
                   <img
@@ -94,11 +117,6 @@ function GroupedInventory({ groups, onOpenProduct, onChanged }: GroupedInventory
                     title={group.product_id ? 'Double-click to rename' : undefined}
                   >
                     {group.name}
-                  </span>
-                )}
-                {group.awaiting_payment > 0 && (
-                  <span className="pill pill-warn" style={{ marginLeft: 8 }}>
-                    {group.awaiting_payment} unpaid
                   </span>
                 )}
               </td>

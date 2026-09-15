@@ -7,6 +7,7 @@ import BulkActionBar from '../components/BulkActionBar'
 import { Skel, TableSkeleton } from '../components/Skeleton'
 import ImportWizard from '../components/ImportWizard'
 import AddInventoryItem from '../components/AddInventoryItem'
+import BulkEditItems from '../components/BulkEditItems'
 import GroupedInventory from '../components/GroupedInventory'
 import ProductDetail from '../components/ProductDetail'
 import type { ProductGroup } from '../api/client'
@@ -119,7 +120,15 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
   const [deleting, setDeleting] = useState(false)
   const [showImport, setShowImport] = useState(false)
   const [showAddItem, setShowAddItem] = useState(false)
+  const [showBulkEdit, setShowBulkEdit] = useState(false)
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set())
+  /** Selection for the "By product" view -- keyed by groupKey(), the same
+   * scheme used everywhere else a product row needs an identity beyond
+   * its (possibly absent) product_id. Kept separate from checkedIds
+   * rather than reusing it: a product-key and a unit-id are different
+   * kinds of thing, and mixing them into one Set would make it possible
+   * to "select" a product-key as if it were a real unit id. */
+  const [checkedGroupKeys, setCheckedGroupKeys] = useState<Set<string>>(new Set())
   const [view, setView] = useState<ViewMode>(
     () => (localStorage.getItem('cache_inventory_view') as ViewMode) || 'grouped'
   )
@@ -132,9 +141,10 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
   function changeView(next: ViewMode): void {
     setView(next)
     localStorage.setItem('cache_inventory_view', next)
-    // Checkboxes only exist in the flat view; leaving a stale selection
-    // behind would show a bulk bar with no way to clear it.
+    // Each view has its own selection; leaving a stale one behind would
+    // show a bulk bar with nothing on screen for it to refer to.
     setCheckedIds(new Set())
+    setCheckedGroupKeys(new Set())
     setViewingProductKey(null)
   }
 
@@ -184,17 +194,70 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
 
   const filtersActive = search.trim() !== '' || categoryFilter !== 'all'
 
+  function toggleGroupChecked(key: string): void {
+    setCheckedGroupKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  function toggleAllGroupsChecked(): void {
+    setCheckedGroupKeys((prev) =>
+      prev.size === visibleGroups.length
+        ? new Set()
+        : new Set(visibleGroups.map((g) => groupKey(g.product_id, g.name)))
+    )
+  }
+
+  /** Every live unit belonging to any of the given product-groups -- what
+   * a bulk action on a "By product" selection actually operates on, since
+   * a product row isn't a row in the database, its units are. */
+  function itemIdsForGroups(keys: Set<string>): string[] {
+    return items
+      .filter((item) => keys.has(groupKey(productIdFor(item), productName(item, ordersById))))
+      .map((item) => item.id)
+  }
+
+  async function bulkDeleteGroups(): Promise<void> {
+    await api.inventory.bulkDelete(itemIdsForGroups(checkedGroupKeys))
+    setCheckedGroupKeys(new Set())
+    await load(true)
+  }
+
+  async function bulkDuplicateGroups(): Promise<void> {
+    await api.inventory.bulkDuplicate(itemIdsForGroups(checkedGroupKeys))
+    setCheckedGroupKeys(new Set())
+    await load(true)
+  }
+
   useEffect(() => {
     load()
   }, [])
 
-  async function load(): Promise<void> {
-    setLoading(true)
+  /** `silent` skips the loading skeleton -- used to re-sync `items`,
+   * `ordersById` AND `groups` together after a bulk action, so the
+   * grouped ("By product") view's totals stay correct without a jarring
+   * full-screen reload for what's otherwise an instant local edit. */
+  async function load(silent = false): Promise<void> {
+    if (!silent) setLoading(true)
     setError(null)
     try {
       const [itemList, orderList, groupList] = await Promise.all([
         api.inventory.list(),
-        api.orders.list({ limit: 500 }),
+        // No limit override -- inherits the backend's own default (1000,
+        // deliberately high; see routers/orders.py). This screen builds
+        // ordersById from the result and resolves every unit's product
+        // through it (productIdFor/productName), so a cap lower than the
+        // real order count doesn't just truncate a list on screen, it
+        // silently breaks product resolution for whichever units' orders
+        // fall outside the window -- confirmed live: a 500 cap against
+        // 531 real orders hid 22 units across 4 products, including 5 of
+        // 7 Prismatic Evolutions ETBs, from their own product's detail
+        // view. Same bug class Orders.tsx already learned this lesson
+        // from once (see that screen's own "limit" history).
+        api.orders.list(),
         api.products.grouped()
       ])
       setItems(itemList)
@@ -203,7 +266,7 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load inventory')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
@@ -233,6 +296,13 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
 
   function toggleAllChecked(): void {
     setCheckedIds((prev) => (prev.size === visibleItems.length ? new Set() : new Set(visibleItems.map((i) => i.id))))
+  }
+
+  /** Same shape as toggleAllChecked, but against an arbitrary list --
+   * ProductDetail's "select all" needs to select all of THAT product's
+   * units, not every unit in the whole (unrelated) flat view. */
+  function toggleAllIn(ids: string[]): void {
+    setCheckedIds((prev) => (prev.size === ids.length ? new Set() : new Set(ids)))
   }
 
   async function save(): Promise<void> {
@@ -281,19 +351,17 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
     }
   }
 
-  async function bulkSetStatus(status: InventoryStatus): Promise<void> {
-    const ids = Array.from(checkedIds)
-    await api.inventory.bulkSetStatus(ids, status)
-    setItems((prev) => prev.map((i) => (checkedIds.has(i.id) ? { ...i, status } : i)))
+  async function bulkDelete(): Promise<void> {
+    if (selectedId && checkedIds.has(selectedId)) closePanel()
+    await api.inventory.bulkDelete(Array.from(checkedIds))
     setCheckedIds(new Set())
+    await load(true)
   }
 
-  async function bulkDelete(): Promise<void> {
-    const ids = Array.from(checkedIds)
-    await api.inventory.bulkDelete(ids)
-    setItems((prev) => prev.filter((i) => !checkedIds.has(i.id)))
-    if (selectedId && checkedIds.has(selectedId)) closePanel()
+  async function bulkDuplicate(): Promise<void> {
+    await api.inventory.bulkDuplicate(Array.from(checkedIds))
     setCheckedIds(new Set())
+    await load(true)
   }
 
   const selectedItem = items.find((i) => i.id === selectedId) ?? null
@@ -371,14 +439,24 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
         </div>
       </div>
 
-      {checkedIds.size > 0 && (
+      {(view === 'units' || (view === 'grouped' && viewingProductKey)) && checkedIds.size > 0 && (
         <BulkActionBar
           count={checkedIds.size}
-          statusOptions={ITEM_STATUSES}
-          onSetStatus={bulkSetStatus}
           onDelete={bulkDelete}
+          onDuplicate={bulkDuplicate}
+          onOpenBulkEdit={() => setShowBulkEdit(true)}
           onClear={() => setCheckedIds(new Set())}
           noun="unit"
+        />
+      )}
+      {view === 'grouped' && !viewingProductKey && checkedGroupKeys.size > 0 && (
+        <BulkActionBar
+          count={checkedGroupKeys.size}
+          onDelete={bulkDeleteGroups}
+          onDuplicate={bulkDuplicateGroups}
+          onOpenBulkEdit={() => setShowBulkEdit(true)}
+          onClear={() => setCheckedGroupKeys(new Set())}
+          noun="product"
         />
       )}
 
@@ -489,6 +567,15 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
               onBack={() => setViewingProductKey(null)}
               onSelectUnit={selectItem}
               selectedId={selectedId}
+              checkedIds={checkedIds}
+              onToggle={toggleChecked}
+              onToggleAll={() =>
+                toggleAllIn(
+                  items
+                    .filter((i) => groupKey(productIdFor(i), productName(i, ordersById)) === viewingProductKey)
+                    .map((i) => i.id)
+                )
+              }
             />
           ) : view === 'grouped' && visibleGroups.length === 0 ? (
             <EmptyState
@@ -502,6 +589,9 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
               groups={visibleGroups}
               onOpenProduct={(group) => setViewingProductKey(groupKey(group.product_id, group.name))}
               onChanged={load}
+              checkedKeys={checkedGroupKeys}
+              onToggle={(group) => toggleGroupChecked(groupKey(group.product_id, group.name))}
+              onToggleAll={toggleAllGroupsChecked}
             />
           ) : visibleItems.length === 0 ? (
             <EmptyState
@@ -680,6 +770,29 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
 
       {showImport && <ImportWizard onClose={() => setShowImport(false)} onImported={load} />}
       {showAddItem && <AddInventoryItem onClose={() => setShowAddItem(false)} onAdded={load} />}
+      {showBulkEdit &&
+        (() => {
+          // Three checkbox selections feed this one modal: the flat "All
+          // units" view and ProductDetail both select actual unit ids
+          // straight into checkedIds, while the grouped "By product" list
+          // selects whole PRODUCTS (checkedGroupKeys), which resolve to
+          // every live unit under them. Only that last case is
+          // group-keyed -- grouped view *without* a product open.
+          const isGroupSelection = view === 'grouped' && !viewingProductKey
+          const ids = isGroupSelection ? itemIdsForGroups(checkedGroupKeys) : Array.from(checkedIds)
+          return (
+            <BulkEditItems
+              count={ids.length}
+              onClose={() => setShowBulkEdit(false)}
+              onApply={(patch) => api.inventory.bulkEdit(ids, patch).then(() => undefined)}
+              onSaved={() => {
+                if (isGroupSelection) setCheckedGroupKeys(new Set())
+                else setCheckedIds(new Set())
+                return load(true)
+              }}
+            />
+          )
+        })()}
     </>
   )
 }

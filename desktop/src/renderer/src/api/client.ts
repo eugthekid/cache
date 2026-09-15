@@ -513,6 +513,14 @@ export const api = {
     bulkDelete: (ids: string[]) => post<BulkResult>('/inventory/bulk-delete', { ids }),
     bulkSetStatus: (ids: string[], status: InventoryStatus) =>
       post<BulkResult>('/inventory/bulk-status', { ids, status }),
+    /** Clones cost basis/location/notes from each source unit; always
+     * starts the copies fresh at 'in_hand', detached from any order. */
+    bulkDuplicate: (ids: string[]) => post<InventoryItem[]>('/inventory/bulk-duplicate', { ids }),
+    /** Mass-adjust price/location/platform/etc. across a selection. Only
+     * the keys present in `patchBody` change -- an omitted field is left
+     * alone on every selected unit, not cleared. */
+    bulkEdit: (ids: string[], patchBody: InventoryItemUpdate) =>
+      post<BulkResult>('/inventory/bulk-edit', { ids, ...patchBody }),
     restore: (ids: string[]) => post<BulkResult>('/inventory/restore', { ids })
   },
 
