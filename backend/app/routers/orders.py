@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
-from app import crud, models, schemas, tracking
+from app import catalog, crud, models, schemas, tracking
 from app.database import get_db
 
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -48,7 +48,26 @@ def create_order(order_in: schemas.OrderCreate, db: Session = Depends(get_db)):
         db.commit()
         return Response(status_code=204)
 
-    return crud.create_order(db, user_id=user.id, order_in=order_in)
+    order = crud.create_order(db, user_id=user.id, order_in=order_in)
+
+    # Same reasoning as routers/import_.py's commit_import(): resolve_product
+    # (inside materialize_order) only ever matches EXACT normalized text
+    # against a product this user already has. A checkout whose retailer
+    # wording differs even slightly from an existing product's stored text
+    # -- "Pokémon Trading Card Game: ... Box" vs the already-catalog-matched
+    # "Pokémon TCG: ..." -- resolves to a brand-new, never-renamed Product
+    # instead of the one the user already sees in Inventory. Catalog
+    # matching is local/cheap (see catalog.find_catalog_matches) and skips
+    # products already confirmed, so it's safe to run on every single
+    # order, not just in bulk import.
+    catalog.find_catalog_matches(db, user.id)
+    # A merge inside find_catalog_matches repoints product_id with a raw
+    # bulk UPDATE (synchronize_session=False) -- refresh so a merge that
+    # happened to involve THIS order's own product doesn't leave the
+    # response carrying a stale, since-merged-away product_id.
+    db.refresh(order)
+
+    return order
 
 
 @router.get("", response_model=list[schemas.OrderOut])
@@ -254,6 +273,10 @@ def rebuild_orders(body: schemas.RebuildRequest, db: Session = Depends(get_db)):
     """
     user = crud.get_or_create_default_user(db)
     result = crud.rebuild_from_messages(db, user.id, source_id=body.source_id)
+    # Same gap as create_order above -- each rebuilt order only gets
+    # resolve_product's exact-text match, never catalog matching. Run it
+    # once after the whole batch rather than per-order inside the loop.
+    catalog.find_catalog_matches(db, user.id)
     return schemas.RebuildResult(**result)
 
 
