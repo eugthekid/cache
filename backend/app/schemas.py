@@ -184,7 +184,6 @@ class InventoryItemOut(BaseModel):
     sold_price: Optional[float]
     sold_at: Optional[datetime]
     sold_platform: Optional[str]
-    money_received_at: Optional[datetime]
     notes: Optional[str]
     created_at: datetime
 
@@ -260,7 +259,6 @@ class ProductGroup(BaseModel):
     sold: int
     total_cost_basis: float
     total_sold_revenue: float
-    awaiting_payment: int
     # None when nothing's sold yet -- distinct from 0, which would claim
     # units sold for free.
     avg_sale_price: Optional[float] = None

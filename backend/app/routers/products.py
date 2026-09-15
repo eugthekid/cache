@@ -121,7 +121,6 @@ def grouped_inventory(db: Session = Depends(get_db)):
                 "sold": 0,
                 "total_cost_basis": 0.0,
                 "total_sold_revenue": 0.0,
-                "awaiting_payment": 0,
                 "_priced_sale_count": 0,  # units sold WITH a recorded price
                 "_sold_cost_basis": 0.0,  # cost basis of those SAME units, for profit
             },
@@ -131,8 +130,6 @@ def grouped_inventory(db: Session = Depends(get_db)):
             group[item.status] += 1
         group["total_cost_basis"] += item.cost_basis or 0
         if item.status == "sold":
-            if item.money_received_at is None:
-                group["awaiting_payment"] += 1
             if item.sold_price is not None:
                 group["total_sold_revenue"] += item.sold_price
                 group["_priced_sale_count"] += 1

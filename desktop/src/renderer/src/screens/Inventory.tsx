@@ -48,7 +48,6 @@ type DraftItem = {
   sold_price: string
   sold_platform: string
   sold_at: string
-  money_received: boolean
   notes: string
 }
 
@@ -62,7 +61,6 @@ function itemToDraft(item: InventoryItem): DraftItem {
     sold_price: item.sold_price != null ? String(item.sold_price) : '',
     sold_platform: item.sold_platform ?? '',
     sold_at: item.sold_at ? item.sold_at.slice(0, 10) : '',
-    money_received: item.money_received_at != null,
     notes: item.notes ?? ''
   }
 }
@@ -319,7 +317,6 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
         sold_price: draft.sold_price ? Number(draft.sold_price) : null,
         sold_platform: draft.sold_platform || null,
         sold_at: draft.sold_at ? new Date(draft.sold_at).toISOString() : undefined,
-        money_received: draft.money_received,
         notes: draft.notes || null
       })
       setItems((prev) => prev.map((i) => (i.id === updated.id ? updated : i)))
@@ -555,7 +552,6 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
                   sold: 0,
                   total_cost_basis: 0,
                   total_sold_revenue: 0,
-                  awaiting_payment: 0,
                   avg_sale_price: null,
                   total_profit: null,
                   image_url: null,
@@ -686,9 +682,11 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
               </Field>
             </div>
 
-            <Field label="Location">
-              <input className="field-input" value={draft.location} onChange={(e) => updateDraft('location', e.target.value)} placeholder="Closet A, Storage bin 3…" />
-            </Field>
+            {draft.status !== 'sold' && (
+              <Field label="Location">
+                <input className="field-input" value={draft.location} onChange={(e) => updateDraft('location', e.target.value)} placeholder="Closet A, Storage bin 3…" />
+              </Field>
+            )}
 
             {draft.status === 'listed' && (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -714,20 +712,6 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
                 <Field label="Sold date">
                   <input className="field-input num" type="date" value={draft.sold_at} onChange={(e) => updateDraft('sold_at', e.target.value)} />
                 </Field>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: 'pointer', padding: '2px 0' }}>
-                  <input type="checkbox" checked={draft.money_received} onChange={(e) => updateDraft('money_received', e.target.checked)} />
-                  <span style={{ fontSize: 12.5 }}>Money received</span>
-                  {selectedItem.money_received_at && (
-                    <span className="num" style={{ fontSize: 11, color: 'var(--text-faint)', marginLeft: 'auto' }}>
-                      {selectedItem.money_received_at.slice(0, 10)}
-                    </span>
-                  )}
-                </label>
-                {!draft.money_received && (
-                  <div className="num" style={{ fontSize: 11, color: 'var(--status-warn)' }}>
-                    Sold — payment not received yet
-                  </div>
-                )}
                 {profit != null && (
                   <div
                     style={{

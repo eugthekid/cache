@@ -308,17 +308,6 @@ def update_inventory_item(
     if updates.get("status") == "sold" and "sold_at" not in updates and item.sold_at is None:
         updates["sold_at"] = _now()
 
-    # money_received is exposed to the UI as a checkbox, but stored as a
-    # timestamp (see InventoryItem.money_received_at). Translate here so
-    # the client never has to invent a date: ticking it means "paid now"
-    # unless an explicit date came with it; unticking clears it.
-    if "money_received" in updates:
-        received = updates.pop("money_received")
-        if received and item.money_received_at is None and "money_received_at" not in updates:
-            updates["money_received_at"] = _now()
-        elif not received:
-            updates["money_received_at"] = None
-
     for field, value in updates.items():
         setattr(item, field, value)
     db.commit()

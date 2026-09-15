@@ -174,21 +174,13 @@ export interface InventoryItem {
   sold_price: number | null
   sold_at: string | null
   sold_platform: string | null
-  /** When the money actually landed. Selling and getting paid are separate
-   * events (often weeks apart on consignment payouts): status='sold' with
-   * this null means sold-but-unpaid. */
-  money_received_at: string | null
   notes: string | null
   created_at: string
 }
 
 export type InventoryItemUpdate = Partial<
   Omit<InventoryItem, 'id' | 'order_id' | 'unit_index' | 'created_at'>
-> & {
-  /** Convenience toggle -- the backend turns this into a money_received_at
-   * timestamp (or clears it), so the UI never has to invent a date. */
-  money_received?: boolean
-}
+>
 
 export interface InventoryItemCreate {
   product_text: string
@@ -312,7 +304,6 @@ export interface ProductGroup {
   sold: number
   total_cost_basis: number
   total_sold_revenue: number
-  awaiting_payment: number
   /** null when nothing's sold yet -- distinct from 0 (which would claim
    * units sold for free). */
   avg_sale_price: number | null
