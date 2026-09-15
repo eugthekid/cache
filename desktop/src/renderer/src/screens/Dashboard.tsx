@@ -84,6 +84,20 @@ function currency(n: number): string {
   return `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
+/** Currency with an explicit + for gains, so a profit figure reads as a
+ * change rather than just a total. */
+function signedCurrency(n: number): string {
+  return `${n >= 0 ? '+' : '−'}${currency(Math.abs(n))}`
+}
+
+function percent(fraction: number): string {
+  return `${Math.round(fraction * 100)}%`
+}
+
+function signedPercent(fraction: number): string {
+  return `${fraction >= 0 ? '+' : '−'}${Math.round(Math.abs(fraction) * 100)}%`
+}
+
 function Dashboard({ onNavigate }: { onNavigate?: (screen: Screen) => void }): React.JSX.Element {
   const [summary, setSummary] = useState<InventorySummary | null>(null)
   const [monthly, setMonthly] = useState<MonthlyPoint[]>([])
@@ -146,6 +160,19 @@ function Dashboard({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
 
   const isFirstRun = (summary?.order_count ?? 0) === 0
 
+  const unitsHeld = (summary?.in_hand ?? 0) + (summary?.listed ?? 0)
+  const soldCount = summary?.sold_priced_count ?? 0
+  const avgCostPerUnitHeld = unitsHeld > 0 ? (summary?.est_inventory_value ?? 0) / unitsHeld : 0
+  const avgSalePrice = soldCount > 0 ? (summary?.sold_revenue ?? 0) / soldCount : 0
+  const avgProfitPerUnit = soldCount > 0 ? (summary?.realized_profit ?? 0) / soldCount : 0
+  // ROI against what those sold units actually cost -- the resale return,
+  // not a margin on revenue.
+  const avgRoi = (summary?.sold_cost_basis ?? 0) > 0 ? (summary?.realized_profit ?? 0) / (summary?.sold_cost_basis ?? 1) : 0
+  // Of everything you've ever acquired (still held + already sold), how
+  // much has actually moved.
+  const sellThrough =
+    unitsHeld + (summary?.sold ?? 0) > 0 ? (summary?.sold ?? 0) / (unitsHeld + (summary?.sold ?? 0)) : 0
+
   return (
     <>
       <div style={{ position: 'relative', display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
@@ -159,16 +186,61 @@ function Dashboard({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
         style={{
           position: 'relative',
           display: 'grid',
-          gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
+          gridTemplateColumns: '1fr 1fr',
           gap: 14,
           opacity: isFirstRun ? 0.42 : 1
         }}
       >
-        <KpiCard label="Total spend" value={isFirstRun ? '—' : currency(summary?.total_cost_basis ?? 0)} sub={isFirstRun ? 'no orders yet' : `${summary?.order_count ?? 0} orders`} accent={!isFirstRun} />
-        <KpiCard label="Est. inv. value" value={isFirstRun ? '—' : currency(summary?.est_inventory_value ?? 0)} sub={isFirstRun ? 'no units yet' : `${summary?.total_units ?? 0} units`} />
-        <KpiCard label="In hand" value={isFirstRun ? '—' : String(summary?.in_hand ?? 0)} sub="units" />
-        <KpiCard label="Listed" value={isFirstRun ? '—' : String(summary?.listed ?? 0)} sub="units" color={isFirstRun ? undefined : 'var(--status-warn)'} />
-        <KpiCard label="Sold" value={isFirstRun ? '—' : String(summary?.sold ?? 0)} sub="all time" color={isFirstRun ? undefined : 'var(--status-success)'} />
+        <SummaryPanel
+          label="Inventory"
+          headline={isFirstRun ? '—' : currency(summary?.est_inventory_value ?? 0)}
+          headlineAccent={!isFirstRun}
+          caption={
+            isFirstRun
+              ? 'nothing on hand yet'
+              : `${summary?.in_hand ?? 0} in hand · ${summary?.listed ?? 0} listed`
+          }
+          stats={
+            isFirstRun
+              ? []
+              : [
+                  { label: 'Total spent', value: currency(summary?.total_cost_basis ?? 0), sub: `${summary?.order_count ?? 0} orders` },
+                  { label: 'Avg cost / unit', value: currency(avgCostPerUnitHeld) },
+                  {
+                    label: 'Aging 60d+',
+                    value: currency(aging?.value_tied_up_60d_plus ?? 0),
+                    sub: `${aging?.buckets[3]?.count ?? 0} unit${(aging?.buckets[3]?.count ?? 0) === 1 ? '' : 's'}`,
+                    warn: (aging?.buckets[3]?.count ?? 0) > 0
+                  }
+                ]
+          }
+        />
+        <SummaryPanel
+          label="Sales · all time"
+          headline={isFirstRun ? '—' : signedCurrency(summary?.realized_profit ?? 0)}
+          headlineColor={
+            isFirstRun
+              ? undefined
+              : (summary?.realized_profit ?? 0) >= 0
+                ? 'var(--status-success)'
+                : 'var(--status-failed)'
+          }
+          caption={
+            isFirstRun || (summary?.sold_priced_count ?? 0) === 0
+              ? 'no sales yet'
+              : `avg ROI ${signedPercent(avgRoi)} · ${summary?.sold_priced_count ?? 0} units sold`
+          }
+          stats={
+            isFirstRun || (summary?.sold_priced_count ?? 0) === 0
+              ? []
+              : [
+                  { label: 'Revenue', value: currency(summary?.sold_revenue ?? 0) },
+                  { label: 'Avg sale', value: currency(avgSalePrice) },
+                  { label: 'Avg profit / unit', value: signedCurrency(avgProfitPerUnit) },
+                  { label: 'Sell-through', value: percent(sellThrough), sub: 'of all units' }
+                ]
+          }
+        />
       </div>
 
       {isFirstRun ? (
@@ -367,45 +439,91 @@ function Dashboard({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
   )
 }
 
-function KpiCard({
-  label,
-  value,
-  sub,
-  accent,
-  color
-}: {
+interface PanelStat {
   label: string
   value: string
-  sub: string
-  accent?: boolean
-  color?: string
+  sub?: string
+  warn?: boolean
+}
+
+/**
+ * One of the two headline cards at the top of the Dashboard: a big
+ * primary figure with a caption, then a row of smaller supporting stats.
+ * Replaces the old five one-number KpiCards -- the same information, but
+ * grouped so "what I'm holding" and "what I've realized" each read as a
+ * single thought instead of five loose tiles.
+ */
+function SummaryPanel({
+  label,
+  headline,
+  caption,
+  stats,
+  headlineAccent,
+  headlineColor
+}: {
+  label: string
+  headline: string
+  caption: string
+  stats: PanelStat[]
+  headlineAccent?: boolean
+  headlineColor?: string
 }): React.JSX.Element {
   return (
-    <div className="card" style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 7 }}>
-      <div className="label" style={color ? { color } : undefined}>
-        {label}
+    <div className="card" style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div className="label">{label}</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        <div
+          className="num"
+          style={{
+            fontSize: 26,
+            fontWeight: 700,
+            color: headlineColor ?? 'var(--text-primary)',
+            ...(headlineAccent
+              ? {
+                  background: 'linear-gradient(120deg, oklch(85% 0.1 205), oklch(76% 0.15 292))',
+                  WebkitBackgroundClip: 'text',
+                  backgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent'
+                }
+              : {})
+          }}
+        >
+          {headline}
+        </div>
+        <div className="num" style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
+          {caption}
+        </div>
       </div>
-      <div
-        className="num"
-        style={{
-          fontSize: 22,
-          fontWeight: 700,
-          color: color ?? 'var(--text-primary)',
-          ...(accent
-            ? {
-                background: 'linear-gradient(120deg, oklch(85% 0.1 205), oklch(76% 0.15 292))',
-                WebkitBackgroundClip: 'text',
-                backgroundClip: 'text',
-                WebkitTextFillColor: 'transparent'
-              }
-            : {})
-        }}
-      >
-        {value}
-      </div>
-      <div className="num" style={{ fontSize: 11, color: 'var(--text-faint)' }}>
-        {sub}
-      </div>
+      {stats.length > 0 && (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(${stats.length}, minmax(0, 1fr))`,
+            gap: 10,
+            borderTop: '1px solid var(--divider)',
+            paddingTop: 12
+          }}
+        >
+          {stats.map((s) => (
+            <div key={s.label} style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+              <div className="num" style={{ fontSize: 10.5, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: 0.3 }}>
+                {s.label}
+              </div>
+              <div
+                className="num"
+                style={{ fontSize: 13.5, fontWeight: 600, color: s.warn ? 'var(--status-warn)' : 'var(--text-primary)', whiteSpace: 'nowrap' }}
+              >
+                {s.value}
+              </div>
+              {s.sub && (
+                <div className="num" style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>
+                  {s.sub}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

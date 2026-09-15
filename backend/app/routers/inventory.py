@@ -76,17 +76,32 @@ def inventory_summary(db: Session = Depends(get_db)):
     """
     items = crud.live_items(db).all()
     unsold_statuses = {"in_hand", "listed"}
+
+    # PRICED sold units only, matching how /products/grouped computes
+    # avg_sale_price and total_profit: a unit marked sold without a
+    # recorded price can't contribute to revenue, profit or ROI without
+    # silently dragging every average toward zero.
+    sold_priced = [i for i in items if i.status == "sold" and i.sold_price is not None]
+    sold_revenue = sum(i.sold_price for i in sold_priced)
+    sold_cost_basis = sum(i.cost_basis or 0 for i in sold_priced)
+
     return {
         "total_units": len(items),
         "in_hand": sum(1 for i in items if i.status == "in_hand"),
         "listed": sum(1 for i in items if i.status == "listed"),
         "sold": sum(1 for i in items if i.status == "sold"),
         "total_cost_basis": sum(i.cost_basis or 0 for i in items),
+        # 0-inclusive, kept as-is for existing callers.
         "total_sold_revenue": sum(i.sold_price or 0 for i in items if i.status == "sold"),
         "est_inventory_value": sum(
             i.cost_basis or 0 for i in items if i.status in unsold_statuses
         ),
         "order_count": crud.live_orders(db).count(),
+        # Realized-sale rollups for the Dashboard's Sales panel.
+        "sold_priced_count": len(sold_priced),
+        "sold_revenue": sold_revenue,
+        "sold_cost_basis": sold_cost_basis,
+        "realized_profit": sold_revenue - sold_cost_basis,
     }
 
 

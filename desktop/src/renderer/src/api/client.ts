@@ -200,6 +200,12 @@ export interface InventorySummary {
   total_sold_revenue: number
   est_inventory_value: number
   order_count: number
+  /** Realized-sale rollups -- PRICED sold units only (a unit sold without
+   * a recorded price can't contribute to revenue/profit/ROI). */
+  sold_priced_count: number
+  sold_revenue: number
+  sold_cost_basis: number
+  realized_profit: number
 }
 
 export interface MonthlyPoint {
