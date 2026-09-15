@@ -120,15 +120,21 @@ def bulk_delete_orders(body: schemas.BulkIds, db: Session = Depends(get_db)):
 
 @router.post("/bulk-status", response_model=schemas.BulkResult)
 def bulk_update_order_status(body: schemas.BulkOrderStatusUpdate, db: Session = Depends(get_db)):
+    """
+    Row-by-row, not a bulk UPDATE: a bulk cancel of orders that already
+    had units materialized needs the same inventory reconciliation a
+    single-order edit gets (see crud.reconcile_order_inventory), and a
+    bare SQL UPDATE has no hook for that -- confirmed live as exactly how
+    the last batch of phantom units got created.
+    """
     if not body.ids:
         return schemas.BulkResult(updated=0)
-    updated = (
-        crud.live_orders(db)
-        .filter(models.Order.id.in_(body.ids))
-        .update({"status": body.status}, synchronize_session=False)
-    )
+    orders = crud.live_orders(db).filter(models.Order.id.in_(body.ids)).all()
+    for order in orders:
+        order.status = body.status
+        crud.reconcile_order_inventory(db, order)
     db.commit()
-    return schemas.BulkResult(updated=updated)
+    return schemas.BulkResult(updated=len(orders))
 
 
 @router.get("/shipping-alerts", response_model=list[schemas.OrderOut])
@@ -188,6 +194,38 @@ def backfill_carriers(db: Session = Depends(get_db)):
             updated += 1
     db.commit()
     return schemas.BulkResult(updated=updated)
+
+
+@router.post("/reconcile-inventory", response_model=schemas.BulkResult)
+def reconcile_inventory(db: Session = Depends(get_db)):
+    """
+    Sweeps every live order through reconcile_order_inventory() -- a
+    one-shot fix for drift from before that reconciliation existed (or
+    from anything that ever mutates status outside update_order/
+    bulk_update_order_status), and safe to re-run any time since the
+    reconciliation itself is idempotent.
+    """
+    orders = crud.live_orders(db).all()
+    changed = 0
+    for order in orders:
+        before = {
+            item.id
+            for item in db.query(models.InventoryItem.id)
+            .filter(models.InventoryItem.order_id == order.id)
+            .filter(models.InventoryItem.deleted_at.is_(None))
+        }
+        crud.reconcile_order_inventory(db, order)
+        db.flush()
+        after = {
+            item.id
+            for item in db.query(models.InventoryItem.id)
+            .filter(models.InventoryItem.order_id == order.id)
+            .filter(models.InventoryItem.deleted_at.is_(None))
+        }
+        if before != after:
+            changed += 1
+    db.commit()
+    return schemas.BulkResult(updated=changed)
 
 
 @router.get("/deleted-summary", response_model=schemas.DeletedSummary)

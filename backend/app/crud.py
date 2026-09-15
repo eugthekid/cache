@@ -228,6 +228,53 @@ def sync_tracking_fields(order: models.Order, previous_shipping_status: Optional
         order.shipping_alert_seen_at = None
 
 
+def reconcile_order_inventory(db: Session, order: models.Order) -> None:
+    """
+    Keeps an order's inventory units consistent with its status AFTER the
+    order was first ingested.
+
+    materialize_order() only creates units at INGEST time, gated on
+    status == 'success' at that moment -- it has no way to react to a
+    LATER status edit, whether that's the user correcting a mistake or a
+    bulk status change. Without this, an order edited to 'cancelled' after
+    its units were already created keeps them forever (confirmed live:
+    two Discord orders retailer-cancelled after the fact were still
+    holding 4 phantom units), and an order corrected the other way, INTO
+    'success', never gets any.
+
+    Conservative on purpose: only touches units still 'in_hand'. A unit
+    that's been listed or sold is a real action the user took -- it must
+    never be silently deleted just because an order's status changed
+    later, whatever the retailer says about the order itself. Soft
+    delete, not hard: the order isn't being deleted, just re-classified,
+    and a status corrected back to 'success' should un-cancel cleanly.
+    """
+    live_items = (
+        db.query(models.InventoryItem)
+        .filter(models.InventoryItem.order_id == order.id)
+        .filter(models.InventoryItem.deleted_at.is_(None))
+        .all()
+    )
+    if order.status == "success":
+        if not live_items:
+            quantity = order.quantity or 1
+            for unit_index in range(1, quantity + 1):
+                db.add(
+                    models.InventoryItem(
+                        user_id=order.user_id,
+                        order_id=order.id,
+                        unit_index=unit_index,
+                        status="in_hand",
+                        cost_basis=order.unit_price,
+                    )
+                )
+    else:
+        now = _now()
+        for item in live_items:
+            if item.status == "in_hand":
+                item.deleted_at = now
+
+
 def update_order(db: Session, order: models.Order, order_in) -> models.Order:
     """
     Applies only the fields the client actually sent (exclude_unset), so a
@@ -238,6 +285,11 @@ def update_order(db: Session, order: models.Order, order_in) -> models.Order:
     for field, value in order_in.model_dump(exclude_unset=True).items():
         setattr(order, field, value)
     sync_tracking_fields(order, previous_shipping_status)
+    # Status is one of the fields this may have just changed -- reconcile
+    # unconditionally rather than diffing old-vs-new: it's cheap (one
+    # indexed query when nothing needs to change) and idempotent, so
+    # there's no benefit to only calling it on an actual transition.
+    reconcile_order_inventory(db, order)
     db.commit()
     db.refresh(order)
     return order
