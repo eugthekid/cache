@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app import crud, models, schemas
+from app import crud, models, products, schemas
 from app.database import get_db
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
@@ -25,10 +25,16 @@ def create_inventory_items(body: schemas.InventoryItemCreate, db: Session = Depe
     if body.quantity < 1:
         raise HTTPException(status_code=400, detail="quantity must be at least 1")
     user = crud.get_or_create_default_user(db)
+    # Same resolution materialize_order() gives an order-linked item --
+    # without a real Product row, a manually-added item never enters the
+    # catalog-matching pipeline: no clean name, no image, ever. See the
+    # identical fix and comment in routers/import_.py's mode='unit' path.
+    product = products.resolve_product(db, user.id, body.product_text)
     items = [
         models.InventoryItem(
             user_id=user.id,
             order_id=None,
+            product_id=product.id if product else None,
             status=body.status,
             product_text=body.product_text,
             cost_basis=body.cost_basis,

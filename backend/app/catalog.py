@@ -139,6 +139,15 @@ def sync_catalog(db: Session, category: str) -> dict:
                         image_url=p.get("image_url"),
                     )
                 )
+                # Same product can legitimately show up in more than one
+                # set's response (a cross-set bundle, or tcgtracking just
+                # listing it twice) -- without this flush, SQLAlchemy can
+                # batch several pending adds together before the next
+                # existence check runs, so a second occurrence of the
+                # SAME external_id reads as "not found" and crashes the
+                # whole sync on the (source, external_id) unique
+                # constraint instead of updating in place. Confirmed live.
+                db.flush()
             upserted += 1
         time.sleep(0.2)  # observed 403s/timeouts pulling all sets back-to-back with no delay
     db.commit()

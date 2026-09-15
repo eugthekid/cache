@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
-import { api, type ImportMode, type ImportPreview } from '../api/client'
+import { api, type ImportCommitResult, type ImportMode, type ImportPreview } from '../api/client'
 
 type Step = 'upload' | 'map' | 'review'
 
@@ -39,7 +39,7 @@ function ImportWizard({ onClose, onImported }: ImportWizardProps): React.JSX.Ele
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [committing, setCommitting] = useState(false)
-  const [result, setResult] = useState<{ created_orders: number; created_inventory_items: number } | null>(null)
+  const [result, setResult] = useState<ImportCommitResult | null>(null)
 
   const fields = mode === 'purchase' ? PURCHASE_FIELDS : UNIT_FIELDS
 
@@ -258,6 +258,15 @@ function ImportWizard({ onClose, onImported }: ImportWizardProps): React.JSX.Ele
                     {result.created_orders > 0 && `${result.created_orders} orders · `}
                     {result.created_inventory_items} inventory units created.
                   </div>
+                  {(result.catalog_matched > 0 || result.catalog_merged > 0 || result.catalog_suggested > 0) && (
+                    <div style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+                      {result.catalog_matched > 0 && `${result.catalog_matched} matched to the catalog`}
+                      {result.catalog_matched > 0 && result.catalog_merged > 0 && ' · '}
+                      {result.catalog_merged > 0 && `${result.catalog_merged} merged into existing products`}
+                      {(result.catalog_matched > 0 || result.catalog_merged > 0) && result.catalog_suggested > 0 && ' · '}
+                      {result.catalog_suggested > 0 && `${result.catalog_suggested} need a quick review in Settings`}
+                    </div>
+                  )}
                   <button className="btn-primary" onClick={onClose} style={{ marginTop: 10 }}>
                     Done
                   </button>

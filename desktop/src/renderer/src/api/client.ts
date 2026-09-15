@@ -433,6 +433,13 @@ export interface ImportCommitResult {
   created_inventory_items: number
   skipped: number
   duplicates: number
+  /** Every import now runs catalog matching against whatever's already
+   * cached locally -- clean names/images for anything that matches, and
+   * a merge for anything that turns out to duplicate an existing
+   * product. See backend routers/import_.py's commit_import. */
+  catalog_matched: number
+  catalog_suggested: number
+  catalog_merged: number
 }
 
 // ---------------------------------------------------------------------------

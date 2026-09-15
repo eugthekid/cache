@@ -34,7 +34,7 @@ import openpyxl
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from app import crud, models
+from app import catalog, crud, models, products
 from app.database import get_db
 from app.models import _now
 
@@ -509,11 +509,20 @@ async def commit_import(
                     created_items += 1
 
         else:  # mode == "unit"
+            # Same product resolution materialize_order() gives an
+            # order-linked item -- without it, a standalone import never
+            # gets a real Product row, which means it never enters the
+            # catalog-matching pipeline at all: no clean name, no image,
+            # ever, regardless of how many times /catalog/match runs
+            # afterward. Confirmed live: 71 units sitting under raw
+            # retailer text ("PKC ETB") because this call was missing.
+            product = products.resolve_product(db, user.id, f["product_text"])
             for _ in range(f["quantity"]):
                 db.add(
                     models.InventoryItem(
                         user_id=user.id,
                         order_id=None,
+                        product_id=product.id if product else None,
                         status=f["status"],
                         product_text=f["product_text"],
                         cost_basis=f["cost_basis"],
@@ -524,10 +533,23 @@ async def commit_import(
 
     db.commit()
 
+    # Match against whatever's already in the local catalog cache -- NOT
+    # a fresh sync from tcgtracking.com, which is deliberately kept a slow,
+    # explicit/occasional action (one request per set, ~285 for Pokemon
+    # alone; see catalog.sync_catalog). Matching itself is local-only and
+    # cheap, so it's safe to run on every import: it's what applies clean
+    # names/images to newly-imported products and merges any that turn
+    # out to already exist under a different raw name (see
+    # catalog._merge_shared_catalog_matches, which this calls into).
+    match_result = catalog.find_catalog_matches(db, user.id)
+
     return {
         "source_id": source.id,
         "created_orders": created_orders,
         "created_inventory_items": created_items,
         "skipped": skipped,
         "duplicates": duplicates,
+        "catalog_matched": match_result["auto_confirmed"],
+        "catalog_suggested": match_result["suggested"],
+        "catalog_merged": match_result["duplicates_merged"],
     }
