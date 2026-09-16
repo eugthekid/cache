@@ -122,6 +122,19 @@ def parse_confirmation(body: str) -> list[Line]:
     if not raw_lines:
         return []
 
+    extended_pre_check = sum(qty * price for _, _, qty, price in raw_lines)
+    stated_subtotal = _to_float(subtotal_match.group(1))
+    # Cross-check against the stated Order Subtotal, found during review:
+    # nothing previously verified that every line actually got captured --
+    # a row whose SKU/Qty/Price didn't match _SKU_ROW_RE (a template
+    # tweak, an unexpected 4th line) would silently drop out of raw_lines,
+    # and tax/shipping would then be allocated across too few lines,
+    # overstating every captured line's cost_basis rather than failing
+    # visibly. A mismatch here means "something wasn't parsed", so this
+    # returns [] rather than a wrong allocation.
+    if abs(extended_pre_check - stated_subtotal) > 0.01:
+        return []
+
     tax_m = _TAX_RE.search(body)
     ship_m = _SHIP_RE.search(body)
     tax = _to_float(tax_m.group(1)) if tax_m else 0.0

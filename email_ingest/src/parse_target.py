@@ -48,7 +48,7 @@ _PRICE_EACH_RE = re.compile(r"\$([\d,]+\.\d{2})\s*/\s*ea")
 _SUBTOTAL_RE = re.compile(r"Subtotal\s*\(\d+\s*(?:items?|or more items)\)\s*\n*\$?([\d,]+\.\d{2})", re.I)
 _DISCOUNT_RE = re.compile(r"-\$([\d,]+\.\d{2})")
 _TAX_RE = re.compile(r"Estimated taxes.*?\$([\d,]+\.\d{2})", re.S)
-_TOTAL_RE = re.compile(r"\bTotal\s*\n*\$?([\d,]+\.\d{2})")
+_TOTAL_RE = re.compile(r"\bTotal\s*\n*\$?([\d,]+\.\d{2})", re.I)
 
 
 @dataclass
@@ -100,15 +100,43 @@ def parse_confirmation(body: str) -> list[Line]:
     price_each = _to_float(price_m.group(1))
     extended = price_each * qty
 
-    subtotal_m = _SUBTOTAL_RE.search(body)
-    tax_m = _TAX_RE.search(body)
-    discount_ms = _DISCOUNT_RE.findall(body)
+    # Bounded to the Order Summary block specifically -- from "Order
+    # Summary" to "Need to make changes?", present verbatim in both real
+    # orders checked, right after the payment-method line. NOT searched
+    # unbounded across the whole body: a discount-badge price in a future
+    # "Take another look" upsell block (plausible for Target, even though
+    # neither real sample happened to have one) would otherwise be summed
+    # into this order's discount by the earlier, looser version of this
+    # function -- confirmed as a real design gap during review, fixed
+    # before it ever mattered on live data.
+    summary_end = body.find("Need to make changes", summary_start)
+    summary_window = body[summary_start: summary_end if summary_end != -1 else len(body)]
+
+    subtotal_m = _SUBTOTAL_RE.search(summary_window)
+    tax_m = _TAX_RE.search(summary_window)
+    total_m = _TOTAL_RE.search(summary_window)
+    discount_ms = _DISCOUNT_RE.findall(summary_window)
     tax = _to_float(tax_m.group(1)) if tax_m else 0.0
     discount = sum(_to_float(d) for d in discount_ms)
+
+    # Cross-check against the stated Subtotal: this is a single line by
+    # construction (see module docstring), so extended MUST equal the
+    # cart subtotal. A mismatch means either Target sent a real multi-line
+    # cart for the first time, or the name/qty/price walk above landed on
+    # the wrong row -- either way, returning a confidently wrong single
+    # line is worse than surfacing nothing for a human to look at.
+    if subtotal_m and abs(_to_float(subtotal_m.group(1)) - extended) > 0.01:
+        return []
 
     # Single line, so no proportional split needed -- the whole cart's
     # tax and discount belong to this one product.
     unit_price = (extended + tax - discount) / qty if qty else price_each
+
+    # Second, independent cross-check against the stated grand Total, when
+    # present. Same reasoning: a stale/missing discount or tax match would
+    # otherwise ship a wrong cost_basis with nothing catching it.
+    if total_m and abs(_to_float(total_m.group(1)) - unit_price * qty) > 0.01:
+        return []
 
     return [Line(raw_product_text=name, quantity=qty, unit_price=unit_price)]
 
