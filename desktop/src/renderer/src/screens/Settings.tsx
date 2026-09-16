@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, type DiscordStatus, type LicenseStatus } from '../api/client'
+import { api, type DiscordStatus, type EmailStatus, type LicenseStatus } from '../api/client'
 import ImportWizard from '../components/ImportWizard'
 import RebuildDeleted from '../components/RebuildDeleted'
 import CatalogMatchControl from '../components/CatalogMatchControl'
 import ErrorState from '../components/ErrorState'
 import DiscordConnect from '../components/DiscordConnect'
+import EmailConnect from '../components/EmailConnect'
 import { Skel } from '../components/Skeleton'
 
 function Settings(): React.JSX.Element {
   const [license, setLicense] = useState<LicenseStatus | null>(null)
   const [discordStatus, setDiscordStatus] = useState<DiscordStatus | null>(null)
+  const [emailStatus, setEmailStatus] = useState<EmailStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [exportMessage, setExportMessage] = useState<string | null>(null)
@@ -25,9 +27,14 @@ function Settings(): React.JSX.Element {
     setLoading(true)
     setError(null)
     try {
-      const [licenseStatus, discord] = await Promise.all([api.license.status(), api.discord.status()])
+      const [licenseStatus, discord, email] = await Promise.all([
+        api.license.status(),
+        api.discord.status(),
+        api.email.status()
+      ])
       setLicense(licenseStatus)
       setDiscordStatus(discord)
+      setEmailStatus(email)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load settings')
     } finally {
@@ -155,7 +162,7 @@ function Settings(): React.JSX.Element {
         <div className="card" style={{ padding: '22px 26px', display: 'flex', flexDirection: 'column' }}>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Integrations</div>
           {discordStatus && <DiscordConnect status={discordStatus} onUpdated={setDiscordStatus} />}
-          <SettingRow label="Email ingestion" sub="OAuth inbox scanning — not yet available" action={<span className="pill pill-neutral">coming soon</span>} dimmed />
+          {emailStatus && <EmailConnect status={emailStatus} onUpdated={setEmailStatus} />}
         </div>
 
         <div className="card" style={{ padding: '22px 26px', display: 'flex', flexDirection: 'column' }}>

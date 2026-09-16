@@ -267,6 +267,17 @@ export interface DiscordConfigIn {
   profile_filter?: string
 }
 
+export interface EmailStatus {
+  configured: boolean
+  address: string | null
+  app_password_suffix: string | null
+}
+
+export interface EmailConfigIn {
+  address: string
+  app_password?: string
+}
+
 export type OrderSort =
   | 'date_desc'
   | 'date_asc'
@@ -538,6 +549,11 @@ export const api = {
   discord: {
     status: () => get<DiscordStatus>('/discord/status'),
     configure: (body: DiscordConfigIn) => post<DiscordStatus>('/discord/configure', body)
+  },
+
+  email: {
+    status: () => get<EmailStatus>('/email/status'),
+    configure: (body: EmailConfigIn) => post<EmailStatus>('/email/configure', body)
   },
 
   products: {

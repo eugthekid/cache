@@ -406,6 +406,25 @@ class DiscordStatus(BaseModel):
     profile_filter: Optional[str] = None
 
 
+class EmailConfigIn(BaseModel):
+    """What the Settings 'Connect Email' form submits. `app_password` is
+    optional on resubmit -- same reasoning as DiscordConfigIn.token:
+    leaving it blank keeps whatever is already written to email.env, so
+    fixing a typo'd address doesn't force re-pasting the password too."""
+
+    address: str
+    app_password: Optional[str] = None
+
+
+class EmailStatus(BaseModel):
+    configured: bool
+    address: Optional[str] = None
+    # Last 4 characters only -- same convention as DiscordStatus.token_suffix
+    # and LicenseStatus.key_suffix: enough to recognize your own without
+    # ever re-displaying the secret itself.
+    app_password_suffix: Optional[str] = None
+
+
 class LicenseActivate(BaseModel):
     key: str
 
