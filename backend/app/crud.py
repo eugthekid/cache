@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from typing import Optional
 
-from app import models, products, retailers, tracking
+from app import claims, matching, models, products, retailers, tracking
 from app.models import _now
 
 
@@ -128,27 +128,165 @@ def record_message(db: Session, user_id: str, order_in) -> models.IngestedMessag
             # status and friends are derived upstream and exist nowhere
             # else. See IngestedMessage.payload.
             payload=_jsonable(order_in.model_dump()),
-            occurred_at=order_in.purchased_at,
+            # The message's own timestamp when the source supplied one,
+            # falling back to the purchase time -- see OrderCreate.
+            # occurred_at for why an email needs the distinction and a
+            # Discord webhook does not.
+            occurred_at=order_in.occurred_at or order_in.purchased_at,
         )
         db.add(message)
         db.flush()
     return message
 
 
-def materialize_order(db: Session, user_id: str, order_in) -> models.Order:
+def _derive(order: models.Order) -> None:
+    """The normalizations that turn a raw payload into a displayable order.
+    Split out because claim resolution has to re-run them: resolution
+    produces what a SOURCE said, and these produce what Cache shows."""
+    order.retailer = retailers.display_name(order.site)
+    if order.raw_product_text:
+        order.raw_product_text = products.display_name(order.raw_product_text)
+
+
+def resolve_order_from_messages(db: Session, order: models.Order) -> models.Order:
+    """
+    Rebuild an order's fields from every claim made about it.
+
+    This is the read side of the claim model (see app/claims.py): the row
+    is a materialization of its messages, so re-running this is always
+    safe and always converges. Fields no source claimed are left exactly
+    as they are -- resolution never blanks data just because nobody
+    mentioned it this time.
+
+    Deliberately ends with the same three steps materialize_order() runs,
+    in the same order, so an order that was merged into looks identical to
+    one that was created outright:
+      derive -> re-resolve product identity -> sync tracking -> reconcile.
+
+    That last step is why this function matters beyond tidiness: when a
+    cancellation email resolves `status` to 'cancelled', the units it
+    already spawned have to go with it.
+    """
+    messages = (
+        db.query(models.IngestedMessage)
+        .filter(models.IngestedMessage.order_id == order.id)
+        .all()
+    )
+    if not messages:
+        return order
+
+    source_types = {
+        s.id: s.type
+        for s in db.query(models.Source).filter(
+            models.Source.id.in_({m.source_id for m in messages})
+        )
+    }
+    resolved = claims.resolve(
+        [
+            claims.build_claim(m.payload, source_types.get(m.source_id), m.occurred_at)
+            for m in messages
+        ]
+    )
+    # User edits last, so a hand correction outlives every future
+    # re-resolution -- see claims.apply_overrides.
+    resolved = claims.apply_overrides(resolved, order.user_overrides)
+
+    previous_shipping_status = order.shipping_status
+    for field, value in resolved.items():
+        setattr(order, field, value)
+
+    _derive(order)
+    product = products.resolve_product(
+        db, order.user_id, order.raw_product_text, category=order.category
+    )
+    if product:
+        order.product_id = product.id
+    sync_tracking_fields(order, previous_shipping_status)
+    reconcile_order_inventory(db, order)
+    return order
+
+
+def find_existing_line(db: Session, user_id: str, order_in) -> Optional[models.Order]:
+    """
+    Whether some other source has already reported this exact purchase.
+
+    Returns the order row this payload describes, or None if it describes
+    something Cache has never seen -- which is the normal case and not an
+    error. See app/matching.py for why identity is cart-then-line rather
+    than a single lookup, and why a line from the SAME source can never
+    match.
+    """
+    if not matching.is_matchable(order_in.status, getattr(order_in, "order_number", None)):
+        return None
+
+    retailer = retailers.display_name(getattr(order_in, "site", None))
+    cart = matching.find_cart(db, user_id, retailer, order_in.order_number)
+    if not cart:
+        return None
+
+    product = products.resolve_product(
+        db,
+        user_id,
+        products.display_name(order_in.raw_product_text) if order_in.raw_product_text else None,
+        category=getattr(order_in, "category", None),
+    )
+    # Whether this source's own earlier lines are eligible depends on how
+    # it emits: a checkout channel sends one message per cart line (its
+    # own lines are DIFFERENT purchases), while email sends one per order
+    # event (its own earlier message is the SAME purchase, and finding it
+    # is the entire point of a cancellation notice).
+    source = db.query(models.Source).filter_by(id=order_in.source_id).first()
+    exclude = (
+        order_in.source_id
+        if matching.emits_one_message_per_line(source.type if source else None)
+        else None
+    )
+
+    return matching.match_line(
+        cart,
+        exclude_source_id=exclude,
+        sku=getattr(order_in, "external_sku", None),
+        unit_price=order_in.unit_price,
+        quantity=order_in.quantity,
+        product_id=product.id if product else None,
+    )
+
+
+def materialize_order(
+    db: Session, user_id: str, order_in, message: Optional[models.IngestedMessage] = None
+) -> models.Order:
     """
     Build the Order (and its inventory units) from a payload. Split out of
     create_order so a rebuild can re-run exactly the same construction from
     a stored message, rather than duplicating the business rules.
+
+    When `message` is given, this first asks whether another source has
+    already reported the same purchase (see find_existing_line). If so the
+    payload becomes one more CLAIM on that existing row rather than a
+    second row -- which is what stops a Discord webhook and the retailer's
+    confirmation email from double-counting spend and double-creating
+    inventory units.
     """
-    order = models.Order(user_id=user_id, **order_in.model_dump())
+    if message is not None:
+        existing = find_existing_line(db, user_id, order_in)
+        if existing is not None:
+            message.order_id = existing.id
+            db.flush()
+            resolve_order_from_messages(db, existing)
+            db.commit()
+            db.refresh(existing)
+            return existing
+
+    # `occurred_at` describes the MESSAGE, not the order -- it lives on
+    # IngestedMessage and there is no column for it here.
+    order = models.Order(
+        user_id=user_id, **order_in.model_dump(exclude={"occurred_at"})
+    )
 
     # Normalize at INGEST so history and new arrivals are always consistent.
     # Both derivations keep the original: `site` is untouched beside
     # `retailer`, and the uncleaned product text stays in the stored payload.
-    order.retailer = retailers.display_name(order.site)
-    if order.raw_product_text:
-        order.raw_product_text = products.display_name(order.raw_product_text)
+    _derive(order)
 
     # Resolve product identity at INGEST, not later: if this only happened
     # in the /products/rebuild batch, every newly-arrived checkout would sit
@@ -165,6 +303,12 @@ def materialize_order(db: Session, user_id: str, order_in) -> models.Order:
     sync_tracking_fields(order)
 
     db.add(order)
+    db.flush()
+    # Link the claim to the row it produced, so a later message for the
+    # same purchase can be resolved against this one -- without it the
+    # message log stays unqueryable and re-resolution has nothing to read.
+    if message is not None:
+        message.order_id = order.id
     db.commit()
     db.refresh(order)
 
@@ -185,13 +329,18 @@ def materialize_order(db: Session, user_id: str, order_in) -> models.Order:
     return order
 
 
-def create_order(db: Session, user_id: str, order_in) -> models.Order:
+def create_order(
+    db: Session, user_id: str, order_in, message: Optional[models.IngestedMessage] = None
+) -> models.Order:
     """
     Insert an order and, if it's a genuine success, spawn one InventoryItem
     per unit of quantity -- the business rule we designed: only successful
     checkouts ever produce physical inventory to track.
+
+    Pass `message` so the payload can be matched against a purchase another
+    source already reported, instead of unconditionally creating a row.
     """
-    return materialize_order(db, user_id, order_in)
+    return materialize_order(db, user_id, order_in, message=message)
 
 
 def sync_tracking_fields(order: models.Order, previous_shipping_status: Optional[str] = None) -> None:
@@ -257,8 +406,33 @@ def reconcile_order_inventory(db: Session, order: models.Order) -> None:
     )
     if order.status == "success":
         if not live_items:
+            # RESTORE BEFORE CREATING. These units were soft-deleted by an
+            # earlier pass of this same function when the order left
+            # 'success', and they carry things the user put there by hand
+            # -- a storage location, notes. Creating fresh rows instead
+            # would orphan all of that behind new ids and leave the old
+            # ones dead forever.
+            #
+            # This mattered little while a status flip was a deliberate
+            # manual act. It matters a lot now that a cancellation email
+            # can flip it automatically and a correction can flip it back,
+            # with nobody watching.
+            restorable = (
+                db.query(models.InventoryItem)
+                .filter(models.InventoryItem.order_id == order.id)
+                .filter(models.InventoryItem.deleted_at.isnot(None))
+                .filter(models.InventoryItem.status == "in_hand")
+                .order_by(models.InventoryItem.unit_index)
+                .all()
+            )
             quantity = order.quantity or 1
-            for unit_index in range(1, quantity + 1):
+            for item in restorable[:quantity]:
+                item.deleted_at = None
+
+            # Only top up whatever restoring didn't cover -- a quantity
+            # that grew since the cancellation, or units that never
+            # existed at all.
+            for unit_index in range(len(restorable[:quantity]) + 1, quantity + 1):
                 db.add(
                     models.InventoryItem(
                         user_id=order.user_id,
@@ -282,7 +456,22 @@ def update_order(db: Session, order: models.Order, order_in) -> models.Order:
     out everything else it omitted.
     """
     previous_shipping_status = order.shipping_status
-    for field, value in order_in.model_dump(exclude_unset=True).items():
+    updates = order_in.model_dump(exclude_unset=True)
+
+    # Record the edit as an OVERRIDE, not just a new column value. The row
+    # is a materialization of its claims (see resolve_order_from_messages),
+    # so without this the next message about this purchase -- or any
+    # rebuild -- would quietly revert whatever the user just corrected.
+    # Only claimable fields need it: a field no source ever reports can't
+    # be overwritten by resolution, so storing it would be noise.
+    overrides = dict(order.user_overrides or {})
+    for field, value in updates.items():
+        if field in claims.CLAIMED_FIELDS:
+            overrides[field] = value.isoformat() if hasattr(value, "isoformat") else value
+    if overrides:
+        order.user_overrides = overrides
+
+    for field, value in updates.items():
         setattr(order, field, value)
     sync_tracking_fields(order, previous_shipping_status)
     # Status is one of the fields this may have just changed -- reconcile
@@ -366,7 +555,10 @@ def rebuild_from_messages(
         # re-derivation, so a rebuilt order is identical to the original
         # rather than a best-effort reconstruction of it.
         order_in = schemas.OrderCreate(**payload)
-        materialize_order(db, user_id, order_in)
+        # Pass the message so a rebuild goes through matching too: if
+        # another source has since reported this purchase, replaying this
+        # payload must amend that row, not resurrect a duplicate beside it.
+        materialize_order(db, user_id, order_in, message=message)
         message.dismissed_at = None
         rebuilt += 1
 

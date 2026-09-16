@@ -134,6 +134,20 @@ class Order(Base):
     order_number: Mapped[str | None] = mapped_column(default=None)
     order_url: Mapped[str | None] = mapped_column(default=None)
 
+    # The retailer's own SKU for THIS line, when a source reports one.
+    # Only email does today (Pokemon Center puts "SKU #: 10-10449-122" on
+    # every line of every confirmation, shipping and cancellation mail).
+    # It is the strongest key for matching one cart line across sources --
+    # see app/matching.py, which prefers it over price when present.
+    external_sku: Mapped[str | None] = mapped_column(default=None)
+
+    # Fields the user edited by hand, {field: value}, applied AFTER claim
+    # resolution (see app/claims.py). Without this, re-resolving an order
+    # from its messages would silently revert a correction the user made
+    # -- and a ledger that undoes your fixes is one you stop trusting.
+    # NULL means "nothing overridden"; readers must tolerate it.
+    user_overrides: Mapped[dict | None] = mapped_column(JSON, default=None)
+
     # The checkout embed's own product thumbnail, when the bot's parser
     # captured one. Fallback source of a product image for anything a
     # catalog will never carry -- sneakers, apparel, Pokemon Center
@@ -349,6 +363,16 @@ class IngestedMessage(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
     source_id: Mapped[str] = mapped_column(ForeignKey("sources.id"))
     external_id: Mapped[str]
+
+    # Which order this message resolved into. THE link that makes the
+    # claim model possible: an order's current state is derived from every
+    # message pointing at it (see app/claims.py), so without this there is
+    # no way to ask "what was this row built from" and the resolver would
+    # need a denormalized provenance blob that can drift from the log it
+    # describes. Nullable because a message can be dismissed, or arrive
+    # before/without producing an order. No FK constraint -- SQLite can't
+    # add one in place; same deliberate drift as orders.product_id.
+    order_id: Mapped[str | None] = mapped_column(default=None, index=True)
 
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
 

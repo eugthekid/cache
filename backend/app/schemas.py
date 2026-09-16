@@ -48,6 +48,17 @@ class OrderCreate(BaseModel):
     ship_to_label: Optional[str] = None
     ship_to_address: Optional[str] = None
     purchased_at: Optional[datetime] = None
+    # When the SOURCE emitted this message, which is not always when the
+    # purchase happened. For a Discord webhook the two coincide. For email
+    # they can be months apart: a cancellation sent 7 September about an
+    # order placed 15 July carries purchased_at=July 15, and using that as
+    # the message time would leave it tied with the confirmation instead
+    # of superseding it -- so claim resolution would pick between them
+    # arbitrarily (see app/claims.py, "recency breaks ties"). Sources that
+    # have a real message timestamp (an email's Date header) must send it
+    # here; omitting it falls back to purchased_at, preserving the
+    # existing behaviour for every Discord source.
+    occurred_at: Optional[datetime] = None
     raw_json: dict[str, Any] = {}
 
 

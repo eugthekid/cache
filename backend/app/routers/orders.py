@@ -48,7 +48,10 @@ def create_order(order_in: schemas.OrderCreate, db: Session = Depends(get_db)):
         db.commit()
         return Response(status_code=204)
 
-    order = crud.create_order(db, user_id=user.id, order_in=order_in)
+    # `message` is what lets this be matched against a purchase another
+    # source already reported -- see crud.materialize_order. Without it
+    # every source that sees the same checkout creates its own row.
+    order = crud.create_order(db, user_id=user.id, order_in=order_in, message=message)
 
     # Same reasoning as routers/import_.py's commit_import(): resolve_product
     # (inside materialize_order) only ever matches EXACT normalized text
