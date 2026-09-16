@@ -12,6 +12,7 @@ import GroupedInventory from '../components/GroupedInventory'
 import ProductDetail from '../components/ProductDetail'
 import type { ProductGroup } from '../api/client'
 import type { Screen } from '../components/NavRail'
+import { datePatchValue, toDateInput } from '../dates'
 
 type ViewMode = 'units' | 'grouped'
 
@@ -60,7 +61,7 @@ function itemToDraft(item: InventoryItem): DraftItem {
     listed_platform: item.listed_platform ?? '',
     sold_price: item.sold_price != null ? String(item.sold_price) : '',
     sold_platform: item.sold_platform ?? '',
-    sold_at: item.sold_at ? item.sold_at.slice(0, 10) : '',
+    sold_at: toDateInput(item.sold_at),
     notes: item.notes ?? ''
   }
 }
@@ -308,6 +309,13 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
     setSaving(true)
     setSaveError(null)
     try {
+      // Same date-only-control hazard as orders.purchased_at: only send
+      // sold_at when the user actually moved the date, so an edit that
+      // just changes the location or price can't rewrite a real sale
+      // time as midnight. Leaving it out also preserves the backend's
+      // "mark sold with no date fills in now" rule (crud.py's
+      // update_inventory_item), which only fires when sold_at is unset.
+      const original = items.find((i) => i.id === selectedId)
       const updated = await api.inventory.update(selectedId, {
         status: draft.status,
         cost_basis: draft.cost_basis ? Number(draft.cost_basis) : null,
@@ -316,7 +324,7 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
         listed_platform: draft.listed_platform || null,
         sold_price: draft.sold_price ? Number(draft.sold_price) : null,
         sold_platform: draft.sold_platform || null,
-        sold_at: draft.sold_at ? new Date(draft.sold_at).toISOString() : undefined,
+        sold_at: datePatchValue(original?.sold_at, draft.sold_at),
         notes: draft.notes || null
       })
       setItems((prev) => prev.map((i) => (i.id === updated.id ? updated : i)))

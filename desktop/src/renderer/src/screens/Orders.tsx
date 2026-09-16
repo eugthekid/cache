@@ -9,6 +9,7 @@ import ErrorState from '../components/ErrorState'
 import BulkActionBar from '../components/BulkActionBar'
 import { Skel, TableSkeleton } from '../components/Skeleton'
 import type { Screen } from '../components/NavRail'
+import { datePatchValue, toDateInput, withDatePart } from '../dates'
 
 const ORDER_STATUSES: OrderStatus[] = ['success', 'failed', 'cancelled', 'pending']
 
@@ -176,7 +177,7 @@ function orderToDraft(order: Order): DraftOrder {
         ? String(Number((order.unit_price * (order.quantity ?? 1)).toFixed(2)))
         : '',
     quantity: order.quantity != null ? String(order.quantity) : '1',
-    purchased_at: order.purchased_at ? order.purchased_at.slice(0, 10) : '',
+    purchased_at: toDateInput(order.purchased_at),
     status: order.status,
     failure_reason: order.failure_reason ?? '',
     order_number: order.order_number ?? '',
@@ -375,7 +376,6 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
         category: draft.category || null,
         unit_price: total != null && qty != null && qty > 0 ? total / qty : total,
         quantity: qty,
-        purchased_at: draft.purchased_at ? new Date(draft.purchased_at).toISOString() : null,
         status: draft.status,
         failure_reason: draft.failure_reason || null,
         order_number: draft.order_number || null,
@@ -389,12 +389,24 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
         const sourceId = await getOrCreateManualSource()
         const created = await api.orders.create({
           ...payload,
+          // Nothing to preserve on a brand-new order, so the picked date
+          // stands on its own (midnight UTC).
+          purchased_at: draft.purchased_at ? withDatePart(null, draft.purchased_at) : null,
           source_id: sourceId,
           external_id: `manual:${crypto.randomUUID()}`
         })
         setOrders((prev) => [created, ...prev])
       } else {
-        const updated = await api.orders.update(selectedId!, payload)
+        // Send purchased_at ONLY if the user actually moved the date. The
+        // field is a date-only control bound to a full timestamp, so
+        // including it unconditionally rewrote the stored purchase time as
+        // midnight -- an edit adding a tracking number destroyed the hour
+        // the order was placed. See ../dates.ts.
+        const original = orders.find((o) => o.id === selectedId)
+        const updated = await api.orders.update(selectedId!, {
+          ...payload,
+          purchased_at: datePatchValue(original?.purchased_at, draft.purchased_at)
+        })
         setOrders((prev) => prev.map((o) => (o.id === updated.id ? updated : o)))
       }
       // Confirm, then close: the save is invisible otherwise -- the panel
