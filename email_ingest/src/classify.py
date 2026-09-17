@@ -57,13 +57,20 @@ class Classification:
 
 
 # --- Pokémon Center -------------------------------------------------------
-# Real subjects observed (thread 19f675e3a4060d74, 19f6bbe0ad6c1533,
-# 1a07c77cd70be10f):
+# Real subjects observed (thread 19f675e3a4060d74, 1a0a5ce2cc85a81b,
+# 1a07c7bf674b6dee):
 #   "Thank you for shopping at PokemonCenter.com!"
 #   "Your Pokémon Center order is on its way!"
 #   "Your order has been canceled"
 # PC's cancellation subject carries NO order number -- it's in the body
 # ("Order Number: P0038875758"), unlike every other template here.
+# CANCELLED_FULL IS A MISNOMER FOR PC: there is only one cancellation
+# subject template, reused verbatim for both a whole-order and a partial
+# cancellation (confirmed by reading the body of 2 real cancellation
+# emails -- it says "the below item(s)" and "The rest of the items (if
+# any) in your order will be processed"). This classification cannot tell
+# the two apart; email_ingest/src/parse_pokemoncenter.py's
+# parse_cancelled_lines() docstring says how a caller must.
 _PC_CONFIRM = re.compile(r"thank you for shopping at pokemoncenter\.com", re.I)
 _PC_SHIPPED = re.compile(r"pok[eé]mon center order is on its way", re.I)
 _PC_CANCELLED = re.compile(r"your order has been canceled", re.I)

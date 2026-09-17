@@ -50,12 +50,53 @@ _DISCOUNT_RE = re.compile(r"-\$([\d,]+\.\d{2})")
 _TAX_RE = re.compile(r"Estimated taxes.*?\$([\d,]+\.\d{2})", re.S)
 _TOTAL_RE = re.compile(r"\bTotal\s*\n*\$?([\d,]+\.\d{2})", re.I)
 
+# "United Parcel Service Tracking # 1ZWY06570303836010" -- verified against
+# 2 real shipping emails (orders 902003598796944 and 912003686512081,
+# threads 1a0ac89cbf63d317 and 1a0ac7c4d29db3a8). The carrier name itself
+# is intentionally not captured: carrier is derived from the tracking
+# number's own FORMAT elsewhere (see backend/app/tracking.py), same
+# discipline as models.py's Order.carrier column -- re-deriving it here
+# from the retailer's free-text label would be a second, possibly
+# conflicting source of truth for the same fact.
+_TARGET_TRACKING_RE = re.compile(r"Tracking #\s*([A-Za-z0-9]+)")
+
+# For a CANCELLED_PARTIAL email, where the order number is NOT in the
+# subject (see classify.py -- only the last 3-4 digits are). Two real
+# formats observed for "Order #" in this template, verified against
+# orders 102002382211975 (2026, thread 19916e47671de66e) and 9180113030448
+# (2022, thread 184398ef18c6cdde): sometimes the number sits directly
+# after "Order #" on one line, sometimes "Order #" is itself the hyperlink
+# and the number is the anchor text on the NEXT line, with a stray blank
+# line between -- the optional (?:https?://\S+\s*\n*\s*)? group tolerates
+# the second shape without requiring it for the first. .search() takes
+# only the first match, which is always this heading occurrence in both
+# real orders checked, never the prose "your order #..." reference later
+# in the body (which sometimes links to "View order details" instead of
+# repeating the digits at all).
+_CANCEL_ORDER_NUMBER_RE = re.compile(r"[Oo]rder #\s*\n*\s*(?:https?://\S+\s*\n*\s*)?(\d{9,20})")
+
+# The "Canceled items" section of a CANCELLED_PARTIAL email: one product
+# name, then "Qty: N" a couple of lines later (a URL line usually sits
+# between them). Verified against the same 2 real orders as
+# _CANCEL_ORDER_NUMBER_RE above -- identical shape in both, 4 years apart.
+_CANCEL_QTY_RE = re.compile(r"Qty\s*:\s*(\d+)")
+
 
 @dataclass
 class Line:
     raw_product_text: str
     quantity: int
     unit_price: float  # tax/discount-inclusive, see module docstring
+
+
+@dataclass
+class CancelledLine:
+    """No unit_price -- the "Canceled items" section states a product name
+    and quantity only, never a price (nothing to allocate: this is the
+    whole reason to know what to reduce, not what it cost)."""
+
+    raw_product_text: str
+    quantity: int
 
 
 def _to_float(money: str) -> float:
@@ -149,3 +190,68 @@ def parse_order_number(body: str) -> Optional[str]:
 def parse_purchased_at(body: str) -> Optional[str]:
     m = _PLACED_RE.search(body)
     return m.group(1) if m else None
+
+
+def parse_tracking_number(body: str) -> Optional[str]:
+    """For a SHIPPED email. Order number for these comes from
+    parse_order_number -- the "Order #NNN" heading is plain, unlinked text
+    in this template (unlike the cancellation templates; see
+    _CANCEL_ORDER_NUMBER_RE), verified against 2 real shipping emails."""
+    m = _TARGET_TRACKING_RE.search(body)
+    return m.group(1) if m else None
+
+
+def parse_cancellation_order_number(body: str) -> Optional[str]:
+    """For a CANCELLED_PARTIAL email only -- CANCELLED_FULL already gets
+    its order number from the subject line (see classify.py), and that is
+    the only reliable source for it: unlike the confirmation and shipping
+    templates, the full-cancellation body links "Order #" itself, leaving
+    the digits split onto their own line, which _CANCEL_ORDER_NUMBER_RE
+    below was written to tolerate for the PARTIAL template specifically
+    and hasn't been checked against a real full-cancellation body."""
+    m = _CANCEL_ORDER_NUMBER_RE.search(body)
+    return m.group(1) if m else None
+
+
+def parse_cancelled_lines(body: str) -> list[CancelledLine]:
+    """
+    For a CANCELLED_PARTIAL email: the specific item(s) actually canceled,
+    from the "Canceled items" section. At most one Line, same invariant
+    as parse_confirmation and for the same reason -- Target has never been
+    observed to put more than one distinct product in one cart, so a
+    "partial" cancellation here means a quantity reduction on that single
+    line, not a split across several products.
+
+    Returns [] when the section marker isn't found or no name/Qty pair
+    follows it -- same discipline as parse_confirmation and
+    parse_pokemoncenter.parse_cancelled_lines: a template surprise should
+    read as "nothing parsed, go look", never crash a sync pass.
+    """
+    cancel_start = body.find("Canceled items")
+    if cancel_start == -1:
+        return []
+    window = body[cancel_start:]
+
+    # First non-blank, non-URL line after the marker is the product name
+    # -- same "walk forward past link/spacer rows" approach as
+    # parse_confirmation's backward walk for the same reason: the real
+    # mail has a variable number of link lines here, not fixed adjacency.
+    # No offset-tracking needed to search past it: a product name never
+    # contains "Qty:" itself, so searching the whole window still lands
+    # on the one real Qty line, not the name.
+    name = None
+    for line in window.splitlines():
+        text = line.strip()
+        if not text or text.startswith("http") or text == "Canceled items":
+            continue
+        name = text
+        break
+
+    if not name:
+        return []
+
+    qty_m = _CANCEL_QTY_RE.search(window)
+    if not qty_m:
+        return []
+
+    return [CancelledLine(raw_product_text=name, quantity=int(qty_m.group(1)))]
