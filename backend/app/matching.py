@@ -183,6 +183,21 @@ def match_line(
       4. Unit price plus quantity, for a claim whose product can't be
          resolved yet. Still useful between two sources that quote the
          same price (Discord against spreadsheet import).
+      5. LAST RESORT: exactly one line left in the cart, and the claim
+         carries no identifying signal at all (sku, product_id, and
+         unit_price all None). Needed for Target's full-cancellation
+         email, which states only "order #NNN was canceled" -- the
+         retailer's own template gives no per-line detail to key on,
+         unlike Pokemon Center's cancellation (always carries a SKU per
+         affected line, matched by rule 1) or Target's own PARTIAL
+         cancellation (carries a product name, resolved to product_id).
+         This is not a guess: with zero signal AND exactly one candidate,
+         that candidate is the only thing the claim COULD describe. Never
+         fires for an ambiguous cart (rule silently does nothing when
+         len(rows) != 1), so a genuinely multi-line PC cart missing a SKU
+         is left unmatched rather than blindly attached to whichever line
+         happens to be first -- unmatched is visible and fixable, a wrong
+         merge is not.
 
     KNOWN LIMIT, to settle in Phase 2 against real mail: a cart can hold
     two Discord lines of the same product at quantity 1 each (real
@@ -233,6 +248,12 @@ def match_line(
             if quantity is not None and (order.quantity or 1) != quantity:
                 continue
             return order
+
+    # Rule 5 -- see docstring. Only when NOTHING was given to match on;
+    # a claim that supplied a sku/product_id/unit_price and simply failed
+    # to find an agreeing line must stay unmatched, not fall through here.
+    if sku is None and product_id is None and unit_price is None and len(rows) == 1:
+        return rows[0]
 
     return None
 

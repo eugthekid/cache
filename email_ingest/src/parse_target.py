@@ -90,10 +90,12 @@ class Line:
 
 
 @dataclass
-class CancelledLine:
-    """No unit_price -- the "Canceled items" section states a product name
-    and quantity only, never a price (nothing to allocate: this is the
-    whole reason to know what to reduce, not what it cost)."""
+class NoPriceLine:
+    """Shared by parse_cancelled_lines and parse_shipped_line -- neither
+    the "Canceled items" section nor the shipping notice states a price,
+    only a product name and quantity (nothing to allocate: knowing what
+    to reduce, or what shipped, is the whole point; what it cost was
+    already recorded by the confirmation)."""
 
     raw_product_text: str
     quantity: int
@@ -204,23 +206,34 @@ def parse_tracking_number(body: str) -> Optional[str]:
 def parse_cancellation_order_number(body: str) -> Optional[str]:
     """For a CANCELLED_PARTIAL email only -- CANCELLED_FULL already gets
     its order number from the subject line (see classify.py), and that is
-    the only reliable source for it: unlike the confirmation and shipping
-    templates, the full-cancellation body links "Order #" itself, leaving
-    the digits split onto their own line, which _CANCEL_ORDER_NUMBER_RE
-    below was written to tolerate for the PARTIAL template specifically
-    and hasn't been checked against a real full-cancellation body."""
+    the only reliable source for it: it happens to also find the right
+    number in a real full-cancellation body (verified), but that body
+    carries no per-line data at all, so there is nothing for a caller to
+    do with parse_cancellation_order_number()'s result there that
+    classify()'s subject-derived number doesn't already give it."""
     m = _CANCEL_ORDER_NUMBER_RE.search(body)
     return m.group(1) if m else None
 
 
-def parse_cancelled_lines(body: str) -> list[CancelledLine]:
+def parse_cancelled_lines(body: str) -> list[NoPriceLine]:
     """
     For a CANCELLED_PARTIAL email: the specific item(s) actually canceled,
     from the "Canceled items" section. At most one Line, same invariant
     as parse_confirmation and for the same reason -- Target has never been
-    observed to put more than one distinct product in one cart, so a
-    "partial" cancellation here means a quantity reduction on that single
-    line, not a split across several products.
+    observed to put more than one distinct product in one cart.
+
+    UNVERIFIED, FLAGGED RATHER THAN GUESSED: whether the stated Qty here
+    is always the line's FULL original quantity (so "partial" describes
+    the cart -- the customer kept other items from a different line --
+    while this one line is wholly cancelled) or can be a SUBSET of it (a
+    genuine partial-quantity cancellation on one line, e.g. 3 ordered, 1
+    cancelled, 2 kept). Neither of the 2 real fixtures checked came with
+    its original confirmation email to compare against, so this could not
+    be verified either way. A caller must NOT assume "the matched line's
+    status becomes cancelled" is always correct -- if the returned
+    quantity is ever less than the matched order's own quantity, treat it
+    as the unresolved case above and leave the line alone rather than
+    guess, same discipline as every reconciliation check in this module.
 
     Returns [] when the section marker isn't found or no name/Qty pair
     follows it -- same discipline as parse_confirmation and
@@ -254,4 +267,46 @@ def parse_cancelled_lines(body: str) -> list[CancelledLine]:
     if not qty_m:
         return []
 
-    return [CancelledLine(raw_product_text=name, quantity=int(qty_m.group(1)))]
+    return [NoPriceLine(raw_product_text=name, quantity=int(qty_m.group(1)))]
+
+
+def parse_shipped_line(body: str) -> Optional[NoPriceLine]:
+    """
+    For a SHIPPED email (both real templates -- "we're getting ready to
+    ship your order" and "your order arrives today/tomorrow", which
+    classify() maps to the same EmailKind; see classify.py's
+    _TARGET_ARRIVES_SOON comment): the product name and quantity, needed
+    so this claim carries SOMETHING app/matching.py can key on (a bare
+    tracking number alone gives match_line() no identifying signal at
+    all).
+
+    Same backward-walk-from-Qty technique as parse_confirmation, not a
+    fixed window -- verified this generalizes across both real shipped
+    templates despite their different surrounding copy ("Track status" /
+    "Looking for your receipt?" vs "Arriving today" / "Any issues with
+    your order?"): in both, the product name is the line immediately
+    before the first "Qty:" in the body, with no other "Qty:" occurrence
+    anywhere earlier (no upsell block sits before the real line in either
+    template -- unlike parse_confirmation, this doesn't need a bounded
+    window to avoid one).
+
+    Returns None, not a Line, mirroring parse_confirmation's "at most
+    one" invariant for Target -- there is nothing to allocate, so [] vs
+    None doesn't need to distinguish "no lines" from "one line with
+    nothing in it" the way parse_pokemoncenter's list return does.
+    """
+    qty_m = _QTY_RE.search(body)
+    if not qty_m:
+        return None
+
+    name = None
+    for line in body[: qty_m.start()].splitlines()[::-1]:
+        text = line.strip()
+        if not text or text.startswith("http"):
+            continue
+        name = text
+        break
+    if not name:
+        return None
+
+    return NoPriceLine(raw_product_text=name, quantity=int(qty_m.group(1)))

@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from parse_pokemoncenter import parse_cancelled_lines, parse_order_number, parse_tracking_number
+from parse_pokemoncenter import parse_cancelled_lines, parse_order_number, parse_shipped_lines, parse_tracking_number
 
 SHIPPED_BODY = """ Pokémon Center
 Hooray! Find out when your order will arrive.
@@ -118,6 +118,13 @@ check(
     parse_tracking_number(SHIPPED_BODY),
     "876939896536",
 )
+
+shipped_lines = parse_shipped_lines(SHIPPED_BODY)
+check("shipped: 3 lines extracted (same row shape as cancellation, extra space around '#')", len(shipped_lines), 3)
+if len(shipped_lines) == 3:
+    check("shipped line 1 sku", shipped_lines[0].external_sku, "10-10449-121")
+    check("shipped line 2 sku, qty 2", (shipped_lines[1].external_sku, shipped_lines[1].quantity), ("10-10447-111", 2))
+    check("shipped line 3 sku", shipped_lines[2].external_sku, "10-10449-122")
 
 # --- cancelled -----------------------------------------------------------
 cancelled = parse_cancelled_lines(CANCELLED_BODY)

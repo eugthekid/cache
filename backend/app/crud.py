@@ -245,7 +245,7 @@ def find_existing_line(db: Session, user_id: str, order_in) -> Optional[models.O
     return matching.match_line(
         cart,
         exclude_source_id=exclude,
-        sku=getattr(order_in, "external_sku", None),
+        sku=order_in.external_sku,
         unit_price=order_in.unit_price,
         quantity=order_in.quantity,
         product_id=product.id if product else None,

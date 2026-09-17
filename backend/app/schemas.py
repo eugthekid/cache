@@ -42,6 +42,16 @@ class OrderCreate(BaseModel):
     order_number: Optional[str] = None
     order_url: Optional[str] = None
     thumbnail_url: Optional[str] = None
+    # The retailer's own per-line identifier -- Pokemon Center's "SKU #:
+    # 10-10449-122", present on every line of every confirmation, shipping
+    # and cancellation email. Declared here so matching.match_line()'s SKU
+    # rule (its strongest) actually has something to receive: this field
+    # existed on the Order model and in claims.CLAIMED_FIELDS already, but
+    # was never on OrderCreate, so crud.find_existing_line's
+    # `getattr(order_in, "external_sku", None)` was silently always None --
+    # found while wiring the email connector, which is what would have
+    # exercised it first.
+    external_sku: Optional[str] = None
     # 'not_shipped' | 'label_created' | 'in_transit' | 'delivered' | 'exception'
     shipping_status: str = "not_shipped"
     tracking_number: Optional[str] = None

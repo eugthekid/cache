@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from parse_target import parse_cancellation_order_number, parse_cancelled_lines, parse_tracking_number
+from parse_target import parse_cancellation_order_number, parse_cancelled_lines, parse_shipped_line, parse_tracking_number
 
 SHIPPED_BODY = """Order #902003598796944
 
@@ -48,6 +48,32 @@ Looking for your receipt?
 
 Visit your
 order details page and select receipts to view your receipt and more.
+"""
+
+# Second real SHIPPED-kind template -- classify()'s _TARGET_ARRIVES_SOON
+# maps "arrives today/tomorrow" subjects to the SAME EmailKind.SHIPPED as
+# the "getting ready to ship" template above, despite a visibly different
+# body layout (different section markers on both sides of the product
+# line). Order 902003598945564, thread 1a06c87fb24dc775.
+ARRIVES_TODAY_BODY = """Order #902003598945564
+
+ Eugene, your order arrives today!
+
+ September 4
+
+Good news — your order is out for delivery and will arrive today!
+
+Visit order details for the latest updates.
+
+ Arriving today
+
+Pokémon Trading Card Game: Mega Evolution—Ascended Heroes Tin- Mega Meganium ex
+
+ Qty: 2
+
+Any issues with your order?
+
+Fixing it is fast! Save time and fix it online. We’ll guide you through anything that’s not quite right.
 """
 
 CANCELLED_FULL_BODY = """Replace Item
@@ -148,6 +174,22 @@ def check(label, got, want):
 # --- shipped -----------------------------------------------------------
 check("shipped: tracking number, carrier label not captured", parse_tracking_number(SHIPPED_BODY), "1ZWY06570303836010")
 
+shipped_line = parse_shipped_line(SHIPPED_BODY)
+check("shipped line found", shipped_line is not None, True)
+if shipped_line:
+    check("shipped line name", shipped_line.raw_product_text, "Pokémon Trading Card Game: 30th Celebration Poster Collection")
+    check("shipped line qty", shipped_line.quantity, 2)
+    check("shipped line carries no price field", hasattr(shipped_line, "unit_price"), False)
+
+# Same function, the OTHER real SHIPPED-kind template -- proves the
+# backward-walk-from-Qty generalizes across both body layouts rather than
+# being tuned to one fixture.
+arrives_line = parse_shipped_line(ARRIVES_TODAY_BODY)
+check("arrives-today line found (2nd real SHIPPED template)", arrives_line is not None, True)
+if arrives_line:
+    check("arrives-today line name", arrives_line.raw_product_text, "Pokémon Trading Card Game: Mega Evolution—Ascended Heroes Tin- Mega Meganium ex")
+    check("arrives-today line qty", arrives_line.quantity, 2)
+
 # --- cancellation order number -------------------------------------------
 check(
     "full-cancel body's split 'Order #' shape is NOT what this function targets (returns whatever it finds, unused by callers for this kind)",
@@ -175,6 +217,7 @@ if lines_2022:
 check("tracking number absent -> None", parse_tracking_number("no tracking info here"), None)
 check("cancellation order number absent -> None", parse_cancellation_order_number("nothing relevant here"), None)
 check("cancelled lines: no 'Canceled items' marker -> []", parse_cancelled_lines("nothing relevant here"), [])
+check("shipped line: no 'Qty:' at all -> None", parse_shipped_line("nothing relevant here"), None)
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

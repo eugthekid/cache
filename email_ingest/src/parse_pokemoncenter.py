@@ -87,11 +87,16 @@ class Line:
 
 
 @dataclass
-class CancelledLine:
-    """No unit_price -- PC's cancellation template never states one (see
-    _CANCEL_SKU_ROW_RE), and $0.00 would misrepresent 'unknown' as 'free'.
-    Callers match this back to the order's existing line by external_sku
-    rather than re-deriving a cost from it."""
+class NoPriceLine:
+    """Shared by parse_cancelled_lines and parse_shipped_lines -- PC's
+    cancellation and shipping templates both list per-line SKU/Qty in the
+    identical row shape (just an extra space around "#" in the shipping
+    one, already tolerated by _CANCEL_SKU_ROW_RE), and NEITHER states a
+    price for the line -- unlike the confirmation template's Line, which
+    is the one place PC ever gives one. $0.00 would misrepresent
+    'unknown' as 'free', so this carries none at all; callers match it
+    back to the order's existing line by external_sku rather than
+    re-deriving a cost from it."""
 
     raw_product_text: str
     external_sku: str
@@ -204,7 +209,47 @@ def parse_tracking_number(body: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
-def parse_cancelled_lines(body: str) -> list[CancelledLine]:
+def _extract_no_price_lines(body: str) -> list[NoPriceLine]:
+    """
+    Shared by parse_cancelled_lines and parse_shipped_lines -- see
+    NoPriceLine's docstring for why the same extraction serves both.
+
+    Bounded to "Order Summary" onward, same as parse_confirmation, but
+    with NO closing marker -- neither template has an "Order Subtotal"
+    line to bound against (there's nothing to sum; see NoPriceLine).
+    Safe anyway: _CANCEL_SKU_ROW_RE requires a literal "SKU #:" that
+    never appears in the nav/legal footer text following the real lines,
+    so nothing there can be mistaken for one.
+
+    Returns [] when "Order Summary" isn't found, same discipline as
+    parse_confirmation.
+    """
+    summary_start = body.find("Order Summary")
+    if summary_start == -1:
+        return []
+    window = body[summary_start:]
+
+    # Same line-by-line adjacency walk as parse_confirmation, for the same
+    # reason: a bridging regex over an unconstrained gap mismatched a
+    # blank separator row as the name in the first draft of that parser.
+    out: list[NoPriceLine] = []
+    pending_name: Optional[str] = None
+    for line in window.splitlines():
+        sku_m = _CANCEL_SKU_ROW_RE.search(line)
+        if sku_m:
+            if pending_name:
+                out.append(NoPriceLine(raw_product_text=pending_name, external_sku=sku_m.group("sku"), quantity=int(sku_m.group("qty"))))
+            pending_name = None
+            continue
+        name_m = _NAME_ROW_RE.match(line)
+        if name_m:
+            text = name_m.group(1).strip()
+            pending_name = text if text else None
+
+    return out
+
+
+def parse_cancelled_lines(body: str) -> list[NoPriceLine]:
     """
     Extract the item(s) actually canceled, from a CANCELLED_FULL-classified
     email -- despite that name, PC has only ONE cancellation subject
@@ -220,38 +265,23 @@ def parse_cancelled_lines(body: str) -> list[CancelledLine]:
     original lines, so neither fixture alone proves the partial case, but
     the body's own copy ("if any") confirms partial cancellation is a
     real possibility this template covers.
-
-    Bounded to "Order Summary" onward, same as parse_confirmation, but
-    with NO closing marker -- this template has no "Order Subtotal" line
-    to bound against (there's nothing to sum; see module note on why
-    CancelledLine carries no price). Safe anyway: _CANCEL_SKU_ROW_RE
-    requires a literal "SKU #:" that never appears in the nav/legal
-    footer text following the real lines, so nothing there can be
-    mistaken for one.
-
-    Returns [] when "Order Summary" isn't found, same discipline as
-    parse_confirmation.
     """
-    summary_start = body.find("Order Summary")
-    if summary_start == -1:
-        return []
-    window = body[summary_start:]
+    return _extract_no_price_lines(body)
 
-    # Same line-by-line adjacency walk as parse_confirmation, for the same
-    # reason: a bridging regex over an unconstrained gap mismatched a
-    # blank separator row as the name in the first draft of that parser.
-    out: list[CancelledLine] = []
-    pending_name: Optional[str] = None
-    for line in window.splitlines():
-        sku_m = _CANCEL_SKU_ROW_RE.search(line)
-        if sku_m:
-            if pending_name:
-                out.append(CancelledLine(raw_product_text=pending_name, external_sku=sku_m.group("sku"), quantity=int(sku_m.group("qty"))))
-            pending_name = None
-            continue
-        name_m = _NAME_ROW_RE.match(line)
-        if name_m:
-            text = name_m.group(1).strip()
-            pending_name = text if text else None
 
-    return out
+def parse_shipped_lines(body: str) -> list[NoPriceLine]:
+    """
+    For a SHIPPED email: the item(s) covered by THIS shipping notice --
+    verified against order P0038927021 (thread 1a0a5ce2cc85a81b), whose
+    SKU/Qty rows are byte-identical in shape to the cancellation
+    template's, just with an extra space around "#" (already tolerated
+    by _CANCEL_SKU_ROW_RE's \\s*).
+
+    NOTE this is not necessarily every line in the order -- the
+    confirmation email mentions a per-shipment "Fulfillment ID", implying
+    split shipments are possible (unverified: no multi-shipment order has
+    been seen yet, since every real order checked so far shipped whole).
+    Callers should treat this as "these specific lines shipped", not "the
+    whole order shipped".
+    """
+    return _extract_no_price_lines(body)
