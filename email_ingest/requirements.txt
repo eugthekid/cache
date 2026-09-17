@@ -1,0 +1,11 @@
+# Synchronous HTTP client for talking to the backend -- see api_client.py's
+# docstring for why this is httpx.Client (sync) rather than bot/'s
+# httpx.AsyncClient: there's no event loop here for a blocking call to
+# stall.
+httpx>=0.27
+
+python-dotenv>=1.0
+
+# IMAP (imaplib), MIME parsing (email), and HTML parsing (html.parser)
+# are all stdlib -- no imapclient/beautifulsoup dependency needed. See
+# imap_client.py and html_to_text.py.
