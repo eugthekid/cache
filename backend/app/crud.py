@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from typing import Optional
 
-from app import claims, matching, models, products, retailers, tracking
+from app import catalog, claims, matching, models, products, retailers, tracking
 from app.models import _now
 
 
@@ -341,6 +341,59 @@ def create_order(
     source already reported, instead of unconditionally creating a row.
     """
     return materialize_order(db, user_id, order_in, message=message)
+
+
+def ingest_order(db: Session, order_in) -> Optional[models.Order]:
+    """
+    The one real entry point for turning any inbound claim (order_in,
+    shaped like schemas.OrderCreate) into a stored Order -- shared by
+    routers/orders.py's POST /orders (an HTTP claim, from Discord or an
+    external caller) and app/email_poller.py's in-process IMAP polling,
+    which calls this directly with no HTTP round trip since it already
+    runs inside this same process. This is the "later ingestion source"
+    this module's own docstring already anticipated.
+
+    Returns None for the one real "nothing to do" case: a message
+    already seen and deliberately dismissed (the user deleted its
+    order). Callers must treat None as a correct, quiet no-op --
+    routers/orders.py turns it into a 204, the email poller just counts
+    it as skipped.
+    """
+    user = get_or_create_default_user(db)
+    message = record_message(db, user_id=user.id, order_in=order_in)
+
+    existing = (
+        live_orders(db)
+        .filter_by(source_id=order_in.source_id, external_id=order_in.external_id)
+        .first()
+    )
+    if existing:
+        # A repost is otherwise a no-op, but backfilling a field that's
+        # currently NULL is safe and worth doing -- see routers/orders.py's
+        # original comment on this, unchanged by the move here.
+        if existing.thumbnail_url is None and order_in.thumbnail_url:
+            existing.thumbnail_url = order_in.thumbnail_url
+        db.commit()
+        return existing
+
+    if message.dismissed_at is not None:
+        db.commit()
+        return None
+
+    # `message` is what lets this be matched against a purchase another
+    # source already reported -- see materialize_order.
+    order = create_order(db, user_id=user.id, order_in=order_in, message=message)
+
+    # Same reasoning as routers/import_.py's commit_import(): catalog
+    # matching is local/cheap and safe to run on every single order, not
+    # just in bulk import. A merge inside find_catalog_matches repoints
+    # product_id with a raw bulk UPDATE (synchronize_session=False) --
+    # refresh so a merge that happened to involve THIS order's own
+    # product doesn't leave the caller holding a stale product_id.
+    catalog.find_catalog_matches(db, user.id)
+    db.refresh(order)
+
+    return order
 
 
 def sync_tracking_fields(order: models.Order, previous_shipping_status: Optional[str] = None) -> None:

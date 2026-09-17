@@ -4,12 +4,26 @@ service_venv.py
 Shared by routers/bot_service.py and routers/email_service.py: creates
 the venv a LaunchAgent's plist points at, if one doesn't already exist,
 so "Install background service" is genuinely the only step -- no
-`python3.14 -m venv ... && pip install ...` typed by hand first.
+`python3.14 -m venv ... && pip install ...` typed by hand first. Also
+stages each service's SOURCE outside iCloud sync (see sync_source()),
+for the same underlying reason the venvs live there.
 
-Both services' venvs already lived outside the iCloud-synced project
-folder for the same deadlock-avoidance reason (see bot/src/config.py's
-BOT_ENV_PATH docstring for the full story) -- this module doesn't change
-where they live, only who creates them.
+CONFIRMED LIVE (2026-09-17), not just theorized: the email connector's
+LaunchAgent crash-looped for several cycles straight after a real
+install, logging `OSError: [Errno 11] Resource deadlock avoided` while
+importing email_ingest/src/classify.py and imap_client.py -- the exact
+deadlock bot/src/config.py's BOT_ENV_PATH docstring already documented
+for a venv living under iCloud sync (~/Desktop), just hit on the SOURCE
+FILES instead this time, which were never moved even though the venv
+was. It self-healed after several attempts (the same "warms up
+eventually, but nothing guarantees it stays warm" behavior already
+described for the venv case) -- self-healing is not a fix, since nothing
+stops it recurring on the next reboot or the next time iCloud evicts
+these files again. bot/src/bot.py sits under the identical iCloud path
+and has the identical exposure; it just hadn't been caught crash-looping
+yet when this was found. sync_source() below is the actual fix for
+both, staging a source copy next to the venv it already doesn't share
+this problem with.
 """
 
 import shutil
@@ -95,3 +109,32 @@ def ensure_venv(venv_path: Path, requirements_path: Path) -> tuple[bool, str]:
     # function's own docstring on why that distinction matters).
     done_marker.write_text("ok")
     return True, ""
+
+
+def sync_source(src_dir: Path, staged_dir: Path) -> None:
+    """
+    Copies src_dir's .py files into staged_dir, replacing whatever was
+    there -- moving a service's actual source out of iCloud sync the
+    same way its venv already was (see this module's docstring for the
+    live crash this fixes). staged_dir should live next to that venv
+    (e.g. ~/.cache-venvs/cache-email/src), so the LaunchAgent's
+    ProgramArguments points there instead of into the dev checkout under
+    ~/Desktop.
+
+    Called on every install AND every restart, not just once like
+    ensure_venv -- unlike a venv's dependencies, source changes on every
+    edit during dev, and a stale copy would silently keep running
+    whatever code existed the last time someone clicked Install. Cheap
+    (plain files, no pip/venv work), so re-running it every time costs
+    nothing.
+
+    This whole mechanism is a DEV-mode stopgap. A packaged build spawns
+    a PyInstaller-frozen executable instead (see backend/backend.spec
+    and desktop/src/main/backend.ts) -- once bot/ and email_ingest/ get
+    the same treatment, sync_source() and the live-source path it points
+    at stop being used at all. Not built yet; this is what makes the
+    dev/LaunchAgent path safe to rely on until then.
+    """
+    if staged_dir.exists():
+        shutil.rmtree(staged_dir)
+    shutil.copytree(src_dir, staged_dir)

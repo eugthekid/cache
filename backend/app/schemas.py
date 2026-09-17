@@ -433,19 +433,13 @@ class EmailStatus(BaseModel):
     # and LicenseStatus.key_suffix: enough to recognize your own without
     # ever re-displaying the secret itself.
     app_password_suffix: Optional[str] = None
-
-
-class EmailServiceStatus(BaseModel):
-    """Same shape as BotServiceStatus, kept as its own class rather than
-    reused directly -- matches this file's existing convention of a
-    parallel class per integration (EmailStatus next to DiscordStatus)
-    even where the fields happen to coincide today, so the two are free
-    to diverge without a shared class fighting that later."""
-
-    supported: bool
-    installed: bool
-    running: bool
-    log_path: Optional[str] = None
+    # Whether app/email_poller.py's background thread is actually alive
+    # right now. No install/uninstall/running-vs-crashed distinction to
+    # show here the way Discord's LaunchAgent status needs -- it's an
+    # in-process thread the backend itself owns, so "configured" and
+    # "running" converge to the same thing except for the brief window
+    # right after a save.
+    polling: bool = False
 
 
 class LicenseActivate(BaseModel):

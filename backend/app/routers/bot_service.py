@@ -29,7 +29,7 @@ from fastapi import APIRouter, HTTPException
 from app import schemas
 from app.config import PROJECT_ROOT
 from app.routers.discord import BOT_ENV_PATH, _read_env, _status_from
-from app.service_venv import ensure_venv
+from app.service_venv import ensure_venv, sync_source
 
 router = APIRouter(prefix="/discord/service", tags=["discord"])
 
@@ -52,7 +52,16 @@ BOT_DIR = Path(PROJECT_ROOT) / "bot"
 # ~/.cache-venvs/cache-bot/bin/pip install -r bot/requirements.txt`.
 VENV_PATH = Path.home() / ".cache-venvs" / "cache-bot"
 VENV_PYTHON = VENV_PATH / "bin" / "python"
-BOT_SCRIPT = BOT_DIR / "src" / "bot.py"
+# NOT BOT_DIR / "src" / "bot.py" -- CONFIRMED LIVE (2026-09-17, see
+# app/service_venv.py's module docstring) that launchd importing source
+# straight out of the iCloud-synced dev checkout hits the exact same
+# `OSError: [Errno 11] Resource deadlock avoided` this file already
+# solved for the venv, just not yet for the source files themselves.
+# sync_source() copies bot/src into this staged location, outside
+# iCloud, on every install and restart; the LaunchAgent always runs from
+# here, never from the live checkout.
+SRC_STAGE_DIR = VENV_PATH / "src"
+BOT_SCRIPT = SRC_STAGE_DIR / "bot.py"
 
 
 def _require_macos() -> None:
@@ -86,7 +95,8 @@ def _plist_xml() -> str:
         # -- exactly when someone's looking at the log because something
         # seems wrong.
         "ProgramArguments": [str(VENV_PYTHON), "-u", str(BOT_SCRIPT)],
-        "WorkingDirectory": str(BOT_DIR),
+        # The staged copy, not BOT_DIR -- see SRC_STAGE_DIR's comment.
+        "WorkingDirectory": str(SRC_STAGE_DIR),
         "RunAtLoad": True,
         # KeepAlive=True (not the SuccessfulExit form): the bot is meant to
         # run forever and never exits on its own, so ANY exit -- crash or
@@ -142,7 +152,9 @@ def install_service():
     app/service_venv.py) -- this button used to assume that venv was
     already there from a manual `python3.14 -m venv ...` a person typed
     themselves; now it makes it, so "Install background service" really
-    is the only step.
+    is the only step. Also stages a copy of bot/src outside iCloud sync
+    (see sync_source() and SRC_STAGE_DIR's comment) -- the LaunchAgent
+    always runs from there.
     """
     _require_macos()
 
@@ -156,6 +168,7 @@ def install_service():
     ok, message = ensure_venv(VENV_PATH, BOT_DIR / "requirements.txt")
     if not ok:
         raise HTTPException(status_code=500, detail=message)
+    sync_source(BOT_DIR / "src", SRC_STAGE_DIR)
 
     LAUNCH_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -197,10 +210,16 @@ def restart_service():
     writes the new file to disk immediately, but a LaunchAgent-managed bot
     process won't see it until it's restarted. Settings calls this right
     after a successful /discord/configure whenever the service is running.
+
+    Also re-syncs the staged source copy first (see sync_source()) --
+    unlike the venv, source changes on every code edit during dev, so a
+    restart with no re-sync would keep running whatever was staged at
+    install time.
     """
     _require_macos()
     if not _is_loaded():
         raise HTTPException(status_code=400, detail="The background service isn't installed.")
+    sync_source(BOT_DIR / "src", SRC_STAGE_DIR)
     result = _run(["launchctl", "kickstart", "-k", f"{_gui_domain()}/{LABEL}"])
     if result.returncode != 0:
         raise HTTPException(

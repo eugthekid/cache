@@ -18,12 +18,12 @@ oversight: revisit with a real OS-keychain design (and a separate answer
 for Windows, which has no Keychain equivalent) before Cache ships to
 users beyond local testing.
 
-Does NOT yet manage a running connector process -- there is no email
-equivalent of bot_service.py's LaunchAgent, because the email connector
-itself (the IMAP fetch loop) hasn't been built yet (see email_ingest/,
-which today holds only the pure classify/parse functions, verified
-against real mail with no live connection). This router exists so the
-credential has somewhere real to live the moment that connector does.
+DOES manage the running connector: unlike the Discord bot, the email
+connector is a background thread inside THIS process (see
+app/email_poller.py's own docstring for why it doesn't need to be a
+separate LaunchAgent-managed service the way the bot is) -- saving a
+credential here starts or restarts it directly, no separate "Install
+background service" step.
 """
 
 import re
@@ -31,7 +31,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
-from app import schemas
+from app import email_poller, schemas
 
 router = APIRouter(prefix="/email", tags=["email"])
 
@@ -71,6 +71,7 @@ def _status_from(values: dict[str, str]) -> schemas.EmailStatus:
         configured=configured,
         address=address or None,
         app_password_suffix=password[-4:] if configured else None,
+        polling=email_poller.is_running(),
     )
 
 
@@ -107,9 +108,10 @@ def configure_email(body: schemas.EmailConfigIn):
     EMAIL_ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
     EMAIL_ENV_PATH.write_text("\n".join(lines) + "\n")
 
-    # No process to restart yet -- see module docstring. When the fetch
-    # loop exists, this is where a kickstart call (mirroring discord.py's
-    # bot_service restart) belongs, so a saved credential takes effect
-    # without the user separately restarting anything by hand.
+    # Picks up the credential just written immediately -- restart() is a
+    # stop-then-start (see email_poller.py), so this is also what makes
+    # "connect for the first time" actually begin polling, not just save
+    # a file for something to read later.
+    email_poller.restart()
 
     return _status_from(_read_env())

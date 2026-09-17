@@ -19,57 +19,17 @@ def create_order(order_in: schemas.OrderCreate, db: Session = Depends(get_db)):
     a message the user has dismissed (by deleting its order) stays dismissed
     even though no order row exists any more, so re-running a backfill can't
     resurrect it. Re-posting a known message is a safe no-op either way.
+
+    The actual work is crud.ingest_order() -- shared with app/email_poller.py,
+    which calls it directly (no HTTP round trip needed for an ingestion
+    source that already runs inside this same process). This endpoint's
+    only job is the HTTP-shape translation: None -> 204, since there is
+    genuinely nothing to report for a dismissed message and inventing a
+    phantom order body would be a lie to the caller.
     """
-    user = crud.get_or_create_default_user(db)
-    message = crud.record_message(db, user_id=user.id, order_in=order_in)
-
-    existing = (
-        crud.live_orders(db)
-        .filter_by(source_id=order_in.source_id, external_id=order_in.external_id)
-        .first()
-    )
-    if existing:
-        # A repost is otherwise a no-op, but backfilling a field that's
-        # currently NULL is safe and worth doing: it's exactly how a
-        # thumbnail_url capture added after the order was first ingested
-        # reaches history on the next resync. Anything the user could have
-        # edited (status, shipping, notes) is deliberately never touched
-        # here -- only fields that started empty and stay retailer/parser
-        # -owned move.
-        if existing.thumbnail_url is None and order_in.thumbnail_url:
-            existing.thumbnail_url = order_in.thumbnail_url
-        db.commit()
-        return existing
-
-    if message.dismissed_at is not None:
-        # Seen before and deliberately deleted. Return a 204 rather than an
-        # order body -- there is genuinely nothing to report, and inventing
-        # a phantom order would be a lie to the caller.
-        db.commit()
+    order = crud.ingest_order(db, order_in)
+    if order is None:
         return Response(status_code=204)
-
-    # `message` is what lets this be matched against a purchase another
-    # source already reported -- see crud.materialize_order. Without it
-    # every source that sees the same checkout creates its own row.
-    order = crud.create_order(db, user_id=user.id, order_in=order_in, message=message)
-
-    # Same reasoning as routers/import_.py's commit_import(): resolve_product
-    # (inside materialize_order) only ever matches EXACT normalized text
-    # against a product this user already has. A checkout whose retailer
-    # wording differs even slightly from an existing product's stored text
-    # -- "Pokémon Trading Card Game: ... Box" vs the already-catalog-matched
-    # "Pokémon TCG: ..." -- resolves to a brand-new, never-renamed Product
-    # instead of the one the user already sees in Inventory. Catalog
-    # matching is local/cheap (see catalog.find_catalog_matches) and skips
-    # products already confirmed, so it's safe to run on every single
-    # order, not just in bulk import.
-    catalog.find_catalog_matches(db, user.id)
-    # A merge inside find_catalog_matches repoints product_id with a raw
-    # bulk UPDATE (synchronize_session=False) -- refresh so a merge that
-    # happened to involve THIS order's own product doesn't leave the
-    # response carrying a stale, since-merged-away product_id.
-    db.refresh(order)
-
     return order
 
 

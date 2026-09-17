@@ -6,17 +6,34 @@ The FastAPI application. Run it with:
 (or just `./run.sh` from the backend/ folder)
 """
 
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
-from app import crud
+from app import crud, email_poller
 from app.database import get_db
-from app.routers import backup, bot_service, catalog, dashboard, discord, email_account, email_service, inventory, license, orders, products, sources, sync
+from app.routers import backup, bot_service, catalog, dashboard, discord, email_account, inventory, license, orders, products, sources, sync
 from app.routers import import_ as import_router
 from app.routers import settings as settings_router
 
-app = FastAPI(title="Inventory Tracker API")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Starts the email poller if a connection is already saved from a
+    # previous run -- nothing happens if it isn't configured yet (see
+    # email_poller.start()). No LaunchAgent, no second process: the
+    # poller is a daemon thread inside THIS process, which is why it
+    # only needs starting/stopping here and after every successful
+    # /email/configure (see routers/email_account.py) rather than
+    # anything install/uninstall-shaped.
+    email_poller.start()
+    yield
+    email_poller.stop()
+
+
+app = FastAPI(title="Inventory Tracker API", lifespan=lifespan)
 
 # The desktop app (Electron/React) runs on a different origin (a local dev
 # server port, or the file:// origin once packaged) than this API, so the
@@ -42,7 +59,6 @@ app.include_router(discord.router)
 app.include_router(email_account.router)
 app.include_router(sync.router)
 app.include_router(bot_service.router)
-app.include_router(email_service.router)
 app.include_router(catalog.router)
 app.include_router(products.router)
 

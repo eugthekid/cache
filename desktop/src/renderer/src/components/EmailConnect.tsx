@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { api, type EmailStatus } from '../api/client'
-import EmailServiceControl from './EmailServiceControl'
 
 interface EmailConnectProps {
   status: EmailStatus
@@ -9,10 +8,11 @@ interface EmailConnectProps {
 
 /** The "Connect Email" form in Settings -- writes email.env through the
  * backend instead of the user hand-editing it, mirroring DiscordConnect's
- * exact shape (see backend/app/routers/email_account.py's docstring for
- * why). EmailServiceControl below is this integration's BotServiceControl
- * equivalent -- installs the connector as a background service so nobody
- * has to run it by hand. */
+ * shape for the form itself, but with no service-control step: the email
+ * connector runs as a background thread INSIDE the backend (see
+ * backend/app/email_poller.py), not a separate LaunchAgent-managed
+ * process the way the Discord bot is. Saving starts it immediately --
+ * "put in the email, app password, and for it to work" was the ask. */
 function EmailConnect({ status, onUpdated }: EmailConnectProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
@@ -38,21 +38,6 @@ function EmailConnect({ status, onUpdated }: EmailConnectProps): React.JSX.Eleme
         app_password: appPassword || undefined
       })
       onUpdated(updated)
-      // If the background service is already installed, restart it so it
-      // picks up the new address/password immediately -- otherwise the
-      // already-running process keeps using the stale credential until
-      // someone happens to restart it by hand. Best-effort: not installed
-      // yet is the common case (nothing to restart), so a failure here
-      // never blocks the save itself from reading as successful -- the
-      // credential is saved either way.
-      try {
-        const serviceStatus = await api.emailService.status()
-        if (serviceStatus.installed) {
-          await api.emailService.restart()
-        }
-      } catch {
-        // Ignored -- see comment above.
-      }
       setJustSaved(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save')
@@ -75,9 +60,9 @@ function EmailConnect({ status, onUpdated }: EmailConnectProps): React.JSX.Eleme
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
             <span style={{ fontSize: 13, fontWeight: 500 }}>Email</span>
-            <span className={`pill ${status.configured ? 'pill-success' : 'pill-neutral'}`}>
+            <span className={`pill ${status.polling ? 'pill-success' : 'pill-neutral'}`}>
               <span className="dot" />
-              {status.configured ? 'configured' : 'not connected'}
+              {status.polling ? 'watching inbox' : status.configured ? 'configured' : 'not connected'}
             </span>
           </div>
           <button className="btn-ghost" style={{ padding: '8px 14px', fontSize: 12.5, flexShrink: 0 }} onClick={startEdit}>
@@ -88,8 +73,6 @@ function EmailConnect({ status, onUpdated }: EmailConnectProps): React.JSX.Eleme
         <div className="num" style={{ fontSize: 12, color: 'var(--text-faint)' }}>
           {status.configured ? status.address : 'Not connected yet'}
         </div>
-
-        {status.configured && <EmailServiceControl />}
       </div>
     )
   }
@@ -101,28 +84,9 @@ function EmailConnect({ status, onUpdated }: EmailConnectProps): React.JSX.Eleme
       {justSaved ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>
-            Saved. Install the background service below to start reading confirmation, tracking, and cancellation
-            emails automatically -- it runs on its own, even when Cache is closed.
+            Saved. Cache is watching this inbox now -- confirmation, tracking, and cancellation emails are read
+            automatically while Cache is open, no extra setup.
           </div>
-          <EmailServiceControl />
-          <details>
-            <summary style={{ fontSize: 11.5, color: 'var(--text-faint)', cursor: 'pointer' }}>
-              Prefer to run it yourself?
-            </summary>
-            <div
-              className="num"
-              style={{
-                fontSize: 12,
-                marginTop: 8,
-                padding: '10px 12px',
-                background: 'var(--field-bg)',
-                border: '1px solid var(--field-border)',
-                borderRadius: 8
-              }}
-            >
-              cd email_ingest && ./run.sh
-            </div>
-          </details>
           <button className="btn-ghost" style={{ padding: '8px 14px', fontSize: 12.5, alignSelf: 'flex-start' }} onClick={() => setOpen(false)}>
             Done
           </button>
