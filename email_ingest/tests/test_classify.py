@@ -58,6 +58,20 @@ check(
     Retailer.TARGET, EmailKind.SHIPPED, "912003448396552",
 )
 check(
+    # NO space before "are" -- copied byte-for-byte from 5 independent
+    # real messages fetched during the 2026-09-17 connector build
+    # (threads 1a0ac89cbf63d317, 1a0ac7c4d29db3a8, 1a0ac7c282ef1f74,
+    # 1a0ac4b59d1b6d21, 1a0ac497802b9204). The fixture right above this
+    # one HAS the space; Target's template turns out to be inconsistent
+    # about it rather than simply always-with or always-without, which
+    # is why the fix tolerates both instead of replacing one with the
+    # other. Every one of those 5 real messages landed as UNRECOGNIZED
+    # before _TARGET_SHIPPED gained its \s*.
+    "shipped, no space before 'are' (real subject, threads 1a0ac89cbf63d317 et al.)",
+    "Get ready for something special! Items from order #902003598796944are about to ship.",
+    Retailer.TARGET, EmailKind.SHIPPED, "902003598796944",
+)
+check(
     "arrives tomorrow (thread 19e794ea3bfcb8c2)",
     "Your order arrives tomorrow! Order #912003448396552",
     Retailer.TARGET, EmailKind.SHIPPED, "912003448396552",

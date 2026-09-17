@@ -91,7 +91,20 @@ _PC_CANCELLED = re.compile(r"your order has been canceled", re.I)
 # field and must be resolved from the body's full number instead.
 _TARGET_NUM = r"#\s?:?(\d{9,20})"
 _TARGET_CONFIRM = re.compile(r"thanks for shopping with us.*here'?s your order " + _TARGET_NUM, re.I)
-_TARGET_SHIPPED = re.compile(r"items from order " + _TARGET_NUM + r" are about to ship", re.I)
+# NOTE the \s* before "are": real subjects have NO space there
+# ("...796944are about to ship.") -- confirmed against 5 independent real
+# messages during the 2026-09-17 connector build (threads 1a0ac89cbf63d317,
+# 1a0ac7c4d29db3a8, 1a0ac7c282ef1f74, 1a0ac4b59d1b6d21, 1a0ac497802b9204),
+# every one missing the space this pattern originally required literally.
+# An EARLIER single real subject (thread 19e6b86e1e42efbb, order
+# 912003448396552) DID have the space -- so Target's template is
+# apparently inconsistent about it, not simply wrong one way or the
+# other, which is exactly why this is \s* (zero or more) and not \s
+# (exactly one): tolerate both rather than betting on either. Found only
+# because ingest.py's own tests run classify() against subjects copied
+# byte-for-byte from a live fetch instead of a hand-typed one -- every
+# real message pulled this way was silently landing as UNRECOGNIZED.
+_TARGET_SHIPPED = re.compile(r"items from order " + _TARGET_NUM + r"\s*are about to ship", re.I)
 _TARGET_ARRIVES_SOON = re.compile(r"your order arrives (today|tomorrow)! order " + _TARGET_NUM, re.I)
 _TARGET_ARRIVED = re.compile(r"items have arrived from order " + _TARGET_NUM, re.I)
 _TARGET_CANCEL_FULL = re.compile(r"sorry, we had to cancel order " + _TARGET_NUM, re.I)
