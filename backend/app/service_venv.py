@@ -40,15 +40,20 @@ def ensure_venv(venv_path: Path, requirements_path: Path) -> tuple[bool, str]:
     (ok, message) -- message is a human-readable error on failure, empty
     on success (including "was already there, did nothing").
 
-    Safe to call on every "Install background service" click: an
-    existing venv is detected by its own python binary actually being
-    present, not just the directory existing -- a half-created venv left
-    over from an interrupted previous attempt (network dropped mid-`pip
-    install`, say) is retried rather than treated as done and handed to
-    a LaunchAgent that would just crash-loop against it.
+    Safe to call on every "Install background service" click: "already
+    there" is judged by a marker file written ONLY after `pip install`
+    itself exits 0 -- NOT by the venv's own python binary existing.
+    `python3.14 -m venv` creates that binary before a single dependency
+    is installed, so checking for it alone would treat a venv whose `pip
+    install` failed partway through (a network drop mid-download, the
+    more likely real failure -- venv creation itself rarely fails) as
+    fully done, silently handing a LaunchAgent a venv missing some of its
+    dependencies. Found by tracing exactly what "already exists" was
+    actually checking, not what the intent behind it was.
     """
     python_bin = venv_path / "bin" / "python"
-    if python_bin.exists():
+    done_marker = venv_path / ".cache-setup-complete"
+    if done_marker.exists():
         return True, ""
 
     system_python = _find_python()
@@ -85,4 +90,8 @@ def ensure_venv(venv_path: Path, requirements_path: Path) -> tuple[bool, str]:
         detail = (install.stderr or install.stdout).strip()
         return False, f"Couldn't install dependencies: {detail[-2000:]}"
 
+    # Only written once pip has actually succeeded -- this, not
+    # python_bin's existence, is what a retry checks (see this
+    # function's own docstring on why that distinction matters).
+    done_marker.write_text("ok")
     return True, ""

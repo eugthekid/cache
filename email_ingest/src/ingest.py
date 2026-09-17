@@ -288,20 +288,29 @@ def _target_claims(
 
     if classification.kind == EmailKind.CANCELLED_PARTIAL:
         # Subject only carries the last 3-4 digits (see classify.py) --
-        # the full number has to come from the body.
+        # the full number has to come from the body, and unlike every
+        # other kind here there is no subject-derived fallback if that
+        # fails. Without order_number this claim can't be matched to
+        # anything (app/matching.find_cart requires one), so
+        # materialize_order would create an ORPHANED "cancelled" order
+        # with no way to connect it to the real cart it was meant to
+        # cancel -- worse than surfacing nothing, same discipline as
+        # every reconciliation check in the parsers this connects to.
         order_number = target.parse_cancellation_order_number(body)
-        line = target.parse_cancelled_lines(body)
-        if not line:
+        if order_number is None:
             return []
-        one = line[0]
+        lines = target.parse_cancelled_lines(body)
+        if not lines:
+            return []
+        line = lines[0]
         return [
             Claim(
                 external_id=f"{message_id}:cancel",
                 status="cancelled",
                 site=site,
                 order_number=order_number,
-                raw_product_text=one.raw_product_text,
-                quantity=one.quantity,
+                raw_product_text=line.raw_product_text,
+                quantity=line.quantity,
                 occurred_at=occurred_at,
             )
         ]

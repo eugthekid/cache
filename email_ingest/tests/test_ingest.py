@@ -337,6 +337,20 @@ if len(t_cancel_partial_claims) == 1:
     check("Target partial cancel raw_product_text", c.raw_product_text, "PS Placeholder 2025")
     check("Target partial cancel quantity", c.quantity, 2)
 
+# Same body, but with the "Order #NNN" heading stripped out entirely --
+# simulates parse_cancellation_order_number() failing to find a number
+# (a future template surprise). Without the order_number guard, this used
+# to still build and return a claim with order_number=None: since
+# app/matching.find_cart requires one, that claim could only ever create
+# an ORPHANED "cancelled" order with no line back to the real cart it was
+# meant to cancel, worse than surfacing nothing.
+TARGET_CANCEL_PARTIAL_BODY_NO_ORDER_NUMBER = TARGET_CANCEL_PARTIAL_BODY.replace("Order #102002382211975\n\n", "")
+check(
+    "Target partial cancel with no parseable order_number -> [] (never an orphaned claim)",
+    build_claims(TARGET_CANCEL_PARTIAL_SUBJECT, TARGET_CANCEL_PARTIAL_BODY_NO_ORDER_NUMBER, "msg-t-cancel-partial-noorder@mail", parse_email_date(DATE_HEADER)),
+    [],
+)
+
 # --- not built / not recognized -------------------------------------------
 check("unrecognized subject -> no claims", build_claims("50% off everything this weekend!", "body", "msg-x@mail", None), [])
 check(

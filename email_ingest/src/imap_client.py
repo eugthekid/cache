@@ -93,6 +93,16 @@ class ImapClient:
         m = _UIDVALIDITY_RE.search(data[0].decode(errors="replace"))
         return m.group(1) if m else None
 
+    # Max UIDs joined into one FETCH command. A first run against a
+    # mailbox with years of history can easily match thousands of UIDs
+    # (this fetches every message's header, not just order mail -- the
+    # SEARCH criteria has no content filter, see the module docstring),
+    # and there's no guarantee an IMAP server accepts an arbitrarily long
+    # comma-joined argument on one command line. Chunking avoids betting
+    # on an unstated server limit; 500 is comfortably small for any
+    # reasonable per-line cap while still keeping the round-trip count low.
+    _FETCH_BATCH_SIZE = 500
+
     def list_candidates(self, since_uid: Optional[int]) -> list[Candidate]:
         """Every message newer than since_uid (or the whole mailbox when
         None -- a first run, or a UIDVALIDITY change), as
@@ -117,6 +127,13 @@ class ImapClient:
             return []
 
         out: list[Candidate] = []
+        for batch_start in range(0, len(uids), self._FETCH_BATCH_SIZE):
+            batch = uids[batch_start : batch_start + self._FETCH_BATCH_SIZE]
+            out.extend(self._fetch_headers(batch))
+        return out
+
+    def _fetch_headers(self, uids: list[int]) -> list[Candidate]:
+        assert self._conn is not None
         uid_set = ",".join(str(u) for u in uids)
         typ, msg_data = self._conn.uid(
             "fetch", uid_set, "(UID BODY.PEEK[HEADER.FIELDS (SUBJECT MESSAGE-ID DATE)])"
@@ -124,6 +141,7 @@ class ImapClient:
         if typ != "OK":
             return []
 
+        out: list[Candidate] = []
         for part in msg_data:
             if not isinstance(part, tuple):
                 # imaplib interleaves a closing b')' after each message's

@@ -190,6 +190,37 @@ if arrives_line:
     check("arrives-today line name", arrives_line.raw_product_text, "Pokémon Trading Card Game: Mega Evolution—Ascended Heroes Tin- Mega Meganium ex")
     check("arrives-today line qty", arrives_line.quantity, 2)
 
+# Constructed adversarial case, proving what the end-bound actually
+# protects (see parse_shipped_line's docstring for what it does NOT):
+# the real line's own "Qty:" is missing (a stand-in for a malformed row),
+# but an upsell item AFTER "Looking for your receipt?" states its own
+# Qty. An unbounded search would fall through to that and return the
+# WRONG product; bounded, this correctly returns None instead of a
+# confidently wrong guess.
+SHIPPED_BODY_MISSING_REAL_QTY = """Order #902003598796944
+
+ Eugene, we're getting ready to ship your order
+
+United Parcel Service Tracking # 1ZWY06570303836010
+
+Track status
+
+ Pokémon Trading Card Game: 30th Celebration Poster Collection
+
+Looking for your receipt?
+
+Pokemon TCG Chinese 30th Ann...
+
+ Qty: 1
+
+Shop now
+"""
+check(
+    "real line's Qty missing -> bound stops the fallthrough to the upsell's Qty (returns None, not a wrong guess)",
+    parse_shipped_line(SHIPPED_BODY_MISSING_REAL_QTY),
+    None,
+)
+
 # --- cancellation order number -------------------------------------------
 check(
     "full-cancel body's split 'Order #' shape is NOT what this function targets (returns whatever it finds, unused by callers for this kind)",

@@ -11,6 +11,7 @@ be regenerated.
 """
 
 import json
+import os
 from typing import Any
 
 from config import STATE_PATH
@@ -31,5 +32,17 @@ def load() -> dict[str, Any]:
 
 
 def save(data: dict[str, Any]) -> None:
+    """Writes via a temp file + atomic rename, not a direct write_text().
+    A plain write_text() opens, writes, then closes -- a process killed
+    or a machine that sleeps mid-write (this runs unattended, on a timer,
+    exactly the kind of process that gets interrupted by a laptop lid
+    closing) can leave a half-written, truncated JSON file behind.
+    load()'s own JSONDecodeError handling already degrades that
+    gracefully (just rescans from the top), but avoiding it costs
+    nothing: os.replace() is atomic on both APFS and HFS+, so a reader
+    always sees either the complete old file or the complete new one,
+    never something in between."""
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(json.dumps(data))
+    tmp_path = STATE_PATH.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(data))
+    os.replace(tmp_path, STATE_PATH)

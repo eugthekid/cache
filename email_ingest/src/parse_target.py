@@ -280,27 +280,44 @@ def parse_shipped_line(body: str) -> Optional[NoPriceLine]:
     tracking number alone gives match_line() no identifying signal at
     all).
 
-    Same backward-walk-from-Qty technique as parse_confirmation, not a
-    fixed window -- verified this generalizes across both real shipped
-    templates despite their different surrounding copy ("Track status" /
-    "Looking for your receipt?" vs "Arriving today" / "Any issues with
-    your order?"): in both, the product name is the line immediately
-    before the first "Qty:" in the body, with no other "Qty:" occurrence
-    anywhere earlier (no upsell block sits before the real line in either
-    template -- unlike parse_confirmation, this doesn't need a bounded
-    window to avoid one).
+    Same backward-walk-from-Qty technique as parse_confirmation, verified
+    this generalizes across both real shipped templates despite their
+    different surrounding copy ("Track status" / "Looking for your
+    receipt?" vs "Arriving today" / "Any issues with your order?"): in
+    both, the product name is the line immediately before the FIRST
+    "Qty:" in the body, with no other "Qty:" occurrence anywhere earlier
+    -- .search() takes that first match, so content any distance AFTER
+    it is already irrelevant with or without a bound.
 
-    Returns None, not a Line, mirroring parse_confirmation's "at most
-    one" invariant for Target -- there is nothing to allocate, so [] vs
-    None doesn't need to distinguish "no lines" from "one line with
-    nothing in it" the way parse_pokemoncenter's list return does.
+    BOUNDED to end at whichever of those two known end-markers actually
+    appears (whichever comes first, if either does). This does NOT guard
+    against an upsell block placed AHEAD of the real line -- nothing
+    could, short of a marker this function doesn't have that reliably
+    starts right before the real line across template variants, which no
+    real sample has offered yet (unlike parse_confirmation's "Order
+    total"..."Order Summary" window, which brackets the real line on
+    BOTH sides). What the bound DOES protect: if the real line's own Qty
+    is ever missed for some other reason (a malformed row, a third
+    template shape), an unbounded search would silently fall through to
+    the NEXT "Qty:" it finds -- which, in a future template, could be an
+    upsell item's, past one of these two markers, attaching a wrong
+    product/quantity with nothing to catch it. Bounded, that same miss
+    returns None instead: refuses to guess, same discipline as every
+    reconciliation check in this module, just for a case with no number
+    to reconcile against.
     """
-    qty_m = _QTY_RE.search(body)
+    end = min(
+        (i for i in (body.find("Looking for your receipt?"), body.find("Any issues with your order?")) if i != -1),
+        default=len(body),
+    )
+    window = body[:end]
+
+    qty_m = _QTY_RE.search(window)
     if not qty_m:
         return None
 
     name = None
-    for line in body[: qty_m.start()].splitlines()[::-1]:
+    for line in window[: qty_m.start()].splitlines()[::-1]:
         text = line.strip()
         if not text or text.startswith("http"):
             continue
