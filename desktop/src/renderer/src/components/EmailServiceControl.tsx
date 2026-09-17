@@ -1,30 +1,36 @@
 import { useEffect, useState } from 'react'
-import { api, type BotServiceStatus } from '../api/client'
+import { api, type EmailServiceStatus } from '../api/client'
 
 /**
- * Install/uninstall the Discord bot as a macOS LaunchAgent -- the
- * background-service alternative to `cd bot && ./run.sh`. Once installed,
- * launchd starts the bot at login and restarts it if it ever crashes, so
- * "running the bot" stops being something the user has to remember.
+ * Install/uninstall the email connector as a macOS LaunchAgent -- the
+ * background-service alternative to `cd email_ingest && ./run.sh`, and a
+ * close mirror of BotServiceControl.tsx (see that file for the fuller
+ * reasoning, identical here). Once installed, launchd starts it at login
+ * and restarts it if it ever crashes -- "running the connector" stops
+ * being something the user has to remember, same as the Discord bot.
  *
- * Kept as its own component (rather than folded into DiscordConnect)
- * because it polls its own status independently of the connect form's
- * open/closed state -- the collapsed Settings row wants this too.
+ * Installing also creates the connector's Python environment the first
+ * time, if it doesn't exist yet (see backend/app/service_venv.py) -- so
+ * this button is genuinely the only step, no terminal required at all.
+ *
+ * Kept as its own component, same reasoning as BotServiceControl: it
+ * polls its own status independently of EmailConnect's open/closed form
+ * state, and the collapsed Settings row wants this too.
  */
-function BotServiceControl(): React.JSX.Element | null {
-  const [status, setStatus] = useState<BotServiceStatus | null>(null)
+function EmailServiceControl(): React.JSX.Element | null {
+  const [status, setStatus] = useState<EmailServiceStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [busyLabel, setBusyLabel] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    api.botService
+    api.emailService
       .status()
       .then(setStatus)
       .catch(() => setStatus(null))
   }, [])
 
-  async function run(label: string, action: () => Promise<BotServiceStatus>): Promise<void> {
+  async function run(label: string, action: () => Promise<EmailServiceStatus>): Promise<void> {
     setBusy(true)
     setBusyLabel(label)
     setError(null)
@@ -39,7 +45,7 @@ function BotServiceControl(): React.JSX.Element | null {
   }
 
   // Not yet loaded, or a non-macOS build -- nothing useful to show. The
-  // caller (Settings) still offers the manual `./run.sh` path either way.
+  // caller (EmailConnect) still offers the manual `./run.sh` path either way.
   if (!status || !status.supported) return null
 
   return (
@@ -54,7 +60,7 @@ function BotServiceControl(): React.JSX.Element | null {
             <button
               className="btn-ghost"
               style={{ padding: '6px 12px', fontSize: 12 }}
-              onClick={() => run('Restarting…', api.botService.restart)}
+              onClick={() => run('Restarting…', api.emailService.restart)}
               disabled={busy}
             >
               {busyLabel === 'Restarting…' ? busyLabel : 'Restart'}
@@ -62,7 +68,7 @@ function BotServiceControl(): React.JSX.Element | null {
             <button
               className="btn-ghost"
               style={{ padding: '6px 12px', fontSize: 12 }}
-              onClick={() => run('Removing…', api.botService.uninstall)}
+              onClick={() => run('Removing…', api.emailService.uninstall)}
               disabled={busy}
             >
               {busyLabel === 'Removing…' ? busyLabel : 'Uninstall service'}
@@ -72,7 +78,7 @@ function BotServiceControl(): React.JSX.Element | null {
           <button
             className="btn-ghost"
             style={{ padding: '6px 12px', fontSize: 12 }}
-            onClick={() => run('Setting up…', api.botService.install)}
+            onClick={() => run('Setting up…', api.emailService.install)}
             disabled={busy}
           >
             {busyLabel === 'Setting up…' ? busyLabel : 'Install background service'}
@@ -81,14 +87,14 @@ function BotServiceControl(): React.JSX.Element | null {
       </div>
       <div style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
         {busyLabel === 'Setting up…'
-          ? 'Setting up the bot for the first time -- this can take a bit while its dependencies install.'
+          ? 'Setting up the connector for the first time -- this can take a bit while its dependencies install.'
           : status.installed
             ? 'Starts automatically at login and restarts itself if it crashes -- you never have to run it by hand.'
-            : 'Runs the bot in the background permanently, without a terminal window. Uninstall any time.'}
+            : 'Runs the connector in the background permanently, without a terminal window. Uninstall any time.'}
       </div>
       {error && <div style={{ fontSize: 12, color: 'var(--status-failed)' }}>{error}</div>}
     </div>
   )
 }
 
-export default BotServiceControl
+export default EmailServiceControl

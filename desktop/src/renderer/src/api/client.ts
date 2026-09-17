@@ -303,6 +303,13 @@ export interface BotServiceStatus {
   log_path: string | null
 }
 
+export interface EmailServiceStatus {
+  supported: boolean
+  installed: boolean
+  running: boolean
+  log_path: string | null
+}
+
 export interface Product {
   id: string
   canonical_name: string
@@ -592,6 +599,13 @@ export const api = {
     install: () => post<BotServiceStatus>('/discord/service/install'),
     uninstall: () => post<BotServiceStatus>('/discord/service/uninstall'),
     restart: () => post<BotServiceStatus>('/discord/service/restart')
+  },
+
+  emailService: {
+    status: () => get<EmailServiceStatus>('/email/service/status'),
+    install: () => post<EmailServiceStatus>('/email/service/install'),
+    uninstall: () => post<EmailServiceStatus>('/email/service/uninstall'),
+    restart: () => post<EmailServiceStatus>('/email/service/restart')
   },
 
   license: {

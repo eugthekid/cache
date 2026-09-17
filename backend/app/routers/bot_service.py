@@ -29,6 +29,7 @@ from fastapi import APIRouter, HTTPException
 from app import schemas
 from app.config import PROJECT_ROOT
 from app.routers.discord import BOT_ENV_PATH, _read_env, _status_from
+from app.service_venv import ensure_venv
 
 router = APIRouter(prefix="/discord/service", tags=["discord"])
 
@@ -44,10 +45,13 @@ BOT_DIR = Path(PROJECT_ROOT) / "bot"
 # reproducible `OSError: [Errno 11] Resource deadlock avoided` crash-loop
 # (site.py stalking the venv's iCloud-synced pyvenv.cfg). Same root cause
 # and same fix as backend/run.sh: a relocated venv outside iCloud's sync
-# path. Recreate it with `python3.14 -m venv ~/.cache-venvs/cache-bot &&
-# ~/.cache-venvs/cache-bot/bin/pip install -r bot/requirements.txt` if
-# it's ever missing.
-VENV_PYTHON = Path.home() / ".cache-venvs" / "cache-bot" / "bin" / "python"
+# path. install_service() below creates it automatically (see
+# app/service_venv.py) -- this no longer has to be run by hand, but the
+# manual command still works if it's ever missing and the app isn't
+# around to do it: `python3.14 -m venv ~/.cache-venvs/cache-bot &&
+# ~/.cache-venvs/cache-bot/bin/pip install -r bot/requirements.txt`.
+VENV_PATH = Path.home() / ".cache-venvs" / "cache-bot"
+VENV_PYTHON = VENV_PATH / "bin" / "python"
 BOT_SCRIPT = BOT_DIR / "src" / "bot.py"
 
 
@@ -133,6 +137,12 @@ def install_service():
     call again after the user edits the Discord form (Settings does this
     automatically) -- bootstrapping over an already-loaded label is a
     no-op error we swallow, then `restart` picks up the new bot/.env.
+
+    Creates ~/.cache-venvs/cache-bot first if it doesn't exist yet (see
+    app/service_venv.py) -- this button used to assume that venv was
+    already there from a manual `python3.14 -m venv ...` a person typed
+    themselves; now it makes it, so "Install background service" really
+    is the only step.
     """
     _require_macos()
 
@@ -142,6 +152,10 @@ def install_service():
             status_code=400,
             detail="Connect Discord (token + server ID) before installing the background service.",
         )
+
+    ok, message = ensure_venv(VENV_PATH, BOT_DIR / "requirements.txt")
+    if not ok:
+        raise HTTPException(status_code=500, detail=message)
 
     LAUNCH_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)

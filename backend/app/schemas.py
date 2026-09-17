@@ -435,6 +435,19 @@ class EmailStatus(BaseModel):
     app_password_suffix: Optional[str] = None
 
 
+class EmailServiceStatus(BaseModel):
+    """Same shape as BotServiceStatus, kept as its own class rather than
+    reused directly -- matches this file's existing convention of a
+    parallel class per integration (EmailStatus next to DiscordStatus)
+    even where the fields happen to coincide today, so the two are free
+    to diverge without a shared class fighting that later."""
+
+    supported: bool
+    installed: bool
+    running: bool
+    log_path: Optional[str] = None
+
+
 class LicenseActivate(BaseModel):
     key: str
 

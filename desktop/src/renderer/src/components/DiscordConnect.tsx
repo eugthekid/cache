@@ -72,6 +72,21 @@ function DiscordConnect({ status, onUpdated }: DiscordConnectProps): React.JSX.E
         profile_filter: profileFilter || undefined
       })
       onUpdated(updated)
+      // If the background service is already installed, restart it so it
+      // picks up the new token/scope immediately -- otherwise the
+      // already-running bot keeps using the stale config until someone
+      // happens to restart it by hand. Best-effort: not installed yet is
+      // the common case (nothing to restart), so a failure here never
+      // blocks the save itself from reading as successful -- the config
+      // is saved either way.
+      try {
+        const serviceStatus = await api.botService.status()
+        if (serviceStatus.installed) {
+          await api.botService.restart()
+        }
+      } catch {
+        // Ignored -- see comment above.
+      }
       setJustSaved(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save')
