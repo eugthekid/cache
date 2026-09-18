@@ -56,13 +56,17 @@ def check(label, got, want):
 
 
 # --- in-memory DB, same schema as the real app -----------------------------
-engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
-Base.metadata.create_all(engine)
-TestSession = sessionmaker(bind=engine)
-
-
+# A FRESH engine per call, not one shared module-level database: each
+# ":memory:" URL given to create_engine() is its own isolated database,
+# but only if create_engine() itself is called again -- reusing one
+# engine (and its one TestSession factory) across both tests below was
+# tried first and immediately caught itself: test 2's User insert hit a
+# UNIQUE constraint on email, because it was the SAME database test 1
+# already put a "local@inventory-tracker" row into, not a second one.
 def make_user_and_db():
-    db = TestSession()
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
     user = models.User(email="local@inventory-tracker")
     db.add(user)
     db.commit()
@@ -148,6 +152,18 @@ GOOD_BODY = """ Pokémon Center
 | Order Total | $9.99 |
 """
 
+# A DIFFERENT order number from GOOD_BODY -- deliberately, not an
+# oversight. Using the same body for messages 1 and 3 was tried first and
+# immediately caught itself too: app/matching.py correctly recognizes
+# the same retailer+order_number+SKU across two separate messages and
+# MERGES the second claim into the first message's order, exactly as
+# designed -- so message 3 never gets its OWN order row, and a check
+# expecting "msg-3:confirm:0" as an Order.external_id fails even though
+# message 3 was genuinely processed, not blocked. Distinct order numbers
+# is what actually isolates "did this message get processed at all" from
+# "did the app's own cross-message matching decide it was a duplicate."
+GOOD_BODY_2 = GOOD_BODY.replace("P0000000001", "P0000000002")
+
 db2, user2 = make_user_and_db()
 
 candidates = [
@@ -155,7 +171,7 @@ candidates = [
     Candidate(uid=2, subject=PC_CONFIRM_SUBJECT, message_id="msg-2-poison", date="Wed, 15 Jul 2026 09:01:00 +0000"),
     Candidate(uid=3, subject=PC_CONFIRM_SUBJECT, message_id="msg-3", date="Wed, 15 Jul 2026 09:02:00 +0000"),
 ]
-bodies = {1: GOOD_BODY, 2: "irrelevant -- fetch raises before this is used", 3: GOOD_BODY}
+bodies = {1: GOOD_BODY, 2: "irrelevant -- fetch raises before this is used", 3: GOOD_BODY_2}
 
 fake_imap = FakeImapClient("addr", "pw", candidates, bodies, poison_uids={2})
 
