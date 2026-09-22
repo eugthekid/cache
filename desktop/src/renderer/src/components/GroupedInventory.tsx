@@ -57,10 +57,12 @@ function GroupedInventory({
           <th style={{ paddingTop: 16, width: 40 }} />
           <th style={{ paddingTop: 16 }}>Product</th>
           <th style={{ paddingTop: 16 }}>Units</th>
+          <th style={{ paddingTop: 16 }}>Not yet shipped</th>
+          <th style={{ paddingTop: 16 }}>In transit</th>
           <th style={{ paddingTop: 16 }}>In hand</th>
           <th style={{ paddingTop: 16 }}>Sold</th>
+          <th style={{ paddingTop: 16 }}>Avg. purchase price</th>
           <th style={{ paddingTop: 16 }}>Avg. sale price</th>
-          <th style={{ paddingTop: 16 }}>Cost basis</th>
           <th style={{ paddingTop: 16 }}>Profit</th>
         </tr>
       </thead>
@@ -71,12 +73,16 @@ function GroupedInventory({
           // '__unmatched__' bucket, which would give every unmatched
           // product the same React key AND the same checkbox state.
           const key = group.product_id ?? (group.name ?? 'unmatched').trim().toLowerCase()
+          const unmatched = group.product_id == null
           return (
             <tr
               key={key}
               className="row"
               onClick={() => onOpenProduct(group)}
-              style={{ cursor: 'pointer' }}
+              style={{
+                cursor: 'pointer',
+                background: unmatched ? 'var(--status-warn-bg)' : undefined
+              }}
             >
               <td onClick={(e) => e.stopPropagation()}>
                 <input type="checkbox" checked={checkedKeys.has(key)} onChange={() => onToggle(group)} />
@@ -119,14 +125,36 @@ function GroupedInventory({
                     {group.name}
                   </span>
                 )}
+                {unmatched && (
+                  <span
+                    style={{
+                      marginLeft: 8,
+                      padding: '2px 7px',
+                      borderRadius: 999,
+                      fontSize: 10.5,
+                      fontWeight: 600,
+                      letterSpacing: 0.3,
+                      textTransform: 'uppercase',
+                      background: 'var(--status-warn-bg)',
+                      color: 'var(--status-warn)'
+                    }}
+                    title="No catalog/product match -- grouped by raw name only"
+                  >
+                    Unmatched
+                  </span>
+                )}
               </td>
               <td className="num" style={{ fontWeight: 600 }}>{group.total_units}</td>
-              <td className="num" style={{ color: 'var(--text-secondary)' }}>{group.in_hand}</td>
+              <td className="num" style={{ color: 'var(--text-secondary)' }}>{group.not_shipped}</td>
+              <td className="num" style={{ color: 'var(--text-secondary)' }}>{group.in_transit}</td>
+              <td className="num" style={{ color: 'var(--status-success)' }}>{group.in_hand}</td>
               <td className="num" style={{ color: 'var(--text-secondary)' }}>{group.sold}</td>
+              <td className="num" style={{ color: 'var(--text-secondary)' }}>
+                {group.avg_cost_basis != null ? money(group.avg_cost_basis) : '—'}
+              </td>
               <td className="num" style={{ color: 'var(--text-secondary)' }}>
                 {group.avg_sale_price != null ? money(group.avg_sale_price) : '—'}
               </td>
-              <td className="num">{money(group.total_cost_basis)}</td>
               <td
                 className="num"
                 style={{

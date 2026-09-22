@@ -116,19 +116,23 @@ def grouped_inventory(db: Session = Depends(get_db)):
                     else None
                 ),
                 "total_units": 0,
+                "not_shipped": 0,
+                "in_transit": 0,
                 "in_hand": 0,
-                "listed": 0,
                 "sold": 0,
                 "total_cost_basis": 0.0,
                 "total_sold_revenue": 0.0,
                 "_priced_sale_count": 0,  # units sold WITH a recorded price
                 "_sold_cost_basis": 0.0,  # cost basis of those SAME units, for profit
+                "_priced_cost_count": 0,  # units WITH a recorded purchase price
             },
         )
         group["total_units"] += 1
-        if item.status in ("in_hand", "listed", "sold"):
+        if item.status in ("not_shipped", "in_transit", "in_hand", "sold"):
             group[item.status] += 1
-        group["total_cost_basis"] += item.cost_basis or 0
+        if item.cost_basis is not None:
+            group["total_cost_basis"] += item.cost_basis
+            group["_priced_cost_count"] += 1
         if item.status == "sold":
             if item.sold_price is not None:
                 group["total_sold_revenue"] += item.sold_price
@@ -139,8 +143,10 @@ def grouped_inventory(db: Session = Depends(get_db)):
     for g in groups.values():
         priced = g.pop("_priced_sale_count")
         sold_cost_basis = g.pop("_sold_cost_basis")
+        priced_cost = g.pop("_priced_cost_count")
         g["avg_sale_price"] = g["total_sold_revenue"] / priced if priced else None
         g["total_profit"] = g["total_sold_revenue"] - sold_cost_basis if priced else None
+        g["avg_cost_basis"] = g["total_cost_basis"] / priced_cost if priced_cost else None
         results.append(g)
 
     return [

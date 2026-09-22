@@ -77,6 +77,7 @@ function ProductDetail({
               <th style={{ paddingTop: 10 }}>Retailer</th>
               <th style={{ paddingTop: 10 }}>Location</th>
               <th style={{ paddingTop: 10 }}>Status</th>
+              <th style={{ paddingTop: 10 }}>Purchase price</th>
               <th style={{ paddingTop: 10 }}>Sale price</th>
               <th style={{ paddingTop: 10 }}>Sold</th>
             </tr>
@@ -106,6 +107,7 @@ function ProductDetail({
                   <td>
                     <StatusPill status={unit.status} />
                   </td>
+                  <td className="num" style={{ color: 'var(--text-secondary)' }}>{money(unit.cost_basis)}</td>
                   <td className="num">{unit.status === 'sold' ? money(unit.sold_price) : '—'}</td>
                   <td className="num" style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
                     {unit.sold_at ? unit.sold_at.slice(0, 10) : '—'}

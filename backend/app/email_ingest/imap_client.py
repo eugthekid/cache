@@ -46,6 +46,7 @@ runs.
 """
 
 import email
+import html
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -139,7 +140,28 @@ class ImapClient:
         of these are worth fetch_plaintext_body()."""
         assert self._conn is not None
         if since_uid:
-            criteria = f"{since_uid + 1}:* ALL"
+            # MUST spell "UID" inside the criteria string itself, not just
+            # call the connection's .uid() method -- found live
+            # (2026-09-18): .uid("search", None, "N:* ALL") sends
+            # "UID SEARCH N:* ALL" at the protocol level, but Gmail still
+            # parses the bare "N:*" sequence-set INSIDE that criteria as a
+            # message SEQUENCE NUMBER range, not a UID range. Since every
+            # persisted since_uid is a real UID (order of 10^5-10^6) and
+            # the mailbox's sequence numbers only run 1..total-message-
+            # count, that range is essentially always out of bounds --
+            # confirmed live: mailbox had 121,239 messages total (max
+            # sequence number 121239) against since_uid=288600, and the
+            # bare form returned exactly ONE message, the single newest
+            # one overall (the out-of-range reversed-set gotcha the
+            # comment below already knew about) -- not the 42 real UIDs
+            # `UID 288601:* ALL` correctly returns. This silently starved
+            # every incremental poll cycle down to "catch at most the one
+            # newest message in the whole mailbox", not just Target/PC
+            # mail -- a burst of same-morning order confirmations landed
+            # within one poll window and all but one were dropped, no
+            # error raised anywhere, because a valid-but-wrong search that
+            # returns fewer rows looks identical to "nothing new."
+            criteria = f"UID {since_uid + 1}:* ALL"
         else:
             cutoff = (datetime.now() - timedelta(days=FIRST_RUN_DAYS)).strftime("%d-%b-%Y")
             criteria = f"SINCE {cutoff}"
@@ -148,13 +170,16 @@ class ImapClient:
             return []
         uids = [int(x) for x in data[0].split()]
         if since_uid:
-            # Known IMAP gotcha: when "N:*" has N past the mailbox's
-            # highest UID (nothing new since last time), some servers
-            # resolve the reversed range by swapping the endpoints and
-            # returning the message AT the highest UID -- i.e. exactly
-            # the one already processed last cycle. Filtering to > since_uid
-            # here is what stops that from re-surfacing as a "new" message
-            # and re-posting a claim that's already been sent.
+            # Known IMAP gotcha, kept as a second line of defense even
+            # with the explicit "UID" prefix above: when "UID N:*" has N
+            # past the mailbox's highest UID (nothing new since last
+            # time), some servers resolve the reversed range by swapping
+            # the endpoints and returning the message AT the highest UID
+            # -- i.e. exactly the one already processed last cycle.
+            # Filtering to > since_uid here is what stops that from
+            # resurfacing as a "new" message and re-posting an
+            # already-sent claim (idempotent either way, but this avoids
+            # the wasted work).
             uids = [u for u in uids if u > since_uid]
         if not uids:
             return []
@@ -215,4 +240,17 @@ class ImapClient:
         content = body_part.get_content()
         if body_part.get_content_type() == "text/html":
             return html_to_text(content)
-        return content
+        # UNESCAPE EVEN THE "NATIVE" text/plain PART -- found live
+        # (2026-09-18): a real Target confirmation's plain-text
+        # alternative carried literal, undecoded numeric character
+        # references as plain text ("Pok&#233;mon", "Mega
+        # Evolution&#8212;Ascended..."), not real HTML for a parser to
+        # decode -- Target's own plain-text part appears to be generated
+        # by stripping tags from the HTML part without entity-decoding
+        # first. html_to_text's HTMLParser(convert_charrefs=True) already
+        # handles the text/html fallback branch correctly; this covers
+        # the text/plain branch the same way. Splitting one Product from
+        # its correctly-decoded Discord-sourced twin was the visible
+        # symptom -- two rows for the same physical item because the
+        # garbled name normalized differently.
+        return html.unescape(content)

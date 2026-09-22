@@ -13,13 +13,14 @@ it testable against the exact same captured fixtures the parser tests
 already use, with no live mailbox and no backend needed.
 
 DISPATCH IS BY (retailer, kind) FROM classify.classify(subject) -- never
-guessed from the body. Only the four kinds actually built are wired:
-CONFIRMATION, SHIPPED, CANCELLED_FULL, CANCELLED_PARTIAL, for Pokemon
-Center and Target. Everything else (Walmart entirely; ARRIVED and
-PAYMENT_PENDING for either retailer) returns [] -- deliberately unbuilt,
-not silently mishandled: see cache-email-primary-architecture memory for
-why (no Walmart parser exists yet; ARRIVED and PAYMENT_PENDING weren't
-part of this build pass and have no verified body format to parse).
+guessed from the body. Built: CONFIRMATION, SHIPPED, CANCELLED_FULL,
+CANCELLED_PARTIAL for Pokemon Center and Target, plus ARRIVED for Target
+(2026-09-19 -- Target's own "items have arrived" email, same zero-
+per-line-signal shape as its CANCELLED_FULL). Still unbuilt: Walmart
+entirely (no parser exists yet), PC's ARRIVED (classify.py has no
+subject pattern for one -- unclear PC even sends this kind), and
+PAYMENT_PENDING for either retailer -- deliberately, not silently
+mishandled: see cache-email-primary-architecture memory for why.
 
 EXTERNAL_ID SCHEME: "{message_id}:{kind}[:{line_index}]". Stable across
 re-processing the same message (a sent email's content and Message-ID
@@ -68,6 +69,8 @@ class Claim:
     external_sku: Optional[str] = None
     tracking_number: Optional[str] = None
     shipping_status: str = "not_shipped"
+    tracking_detail: Optional[str] = None
+    ship_to_address: Optional[str] = None
     purchased_at: Optional[str] = None
     occurred_at: Optional[str] = None
 
@@ -138,6 +141,7 @@ def _pc_claims(
 
     if classification.kind == EmailKind.CONFIRMATION:
         lines = pc.parse_confirmation(body)
+        ship_to_address = pc.parse_ship_to_address(body)
         return [
             Claim(
                 external_id=f"{message_id}:confirm:{i}",
@@ -148,6 +152,7 @@ def _pc_claims(
                 quantity=line.quantity,
                 unit_price=line.unit_price,
                 external_sku=line.external_sku,
+                ship_to_address=ship_to_address,
                 purchased_at=purchased_at,
                 occurred_at=occurred_at,
             )
@@ -233,6 +238,7 @@ def _target_claims(
         order_number = classification.order_number or target.parse_order_number(body)
         purchased_at = _to_iso(target.parse_purchased_at(body), _DATE_FORMAT)
         lines = target.parse_confirmation(body)
+        ship_to_address = target.parse_ship_to_address(body)
         return [
             Claim(
                 external_id=f"{message_id}:confirm",
@@ -242,6 +248,7 @@ def _target_claims(
                 raw_product_text=line.raw_product_text,
                 quantity=line.quantity,
                 unit_price=line.unit_price,
+                ship_to_address=ship_to_address,
                 purchased_at=purchased_at,
                 occurred_at=occurred_at,
             )
@@ -290,17 +297,44 @@ def _target_claims(
             )
         ]
 
+    if classification.kind == EmailKind.ARRIVED:
+        # Same zero-per-line-signal shape as CANCELLED_FULL above -- the
+        # subject carries the order number (classify.py), the body only
+        # ever confirms delivery, never per-line detail worth the upsell-
+        # block risk of parsing further. status="success" is a safe,
+        # true assertion (an order that arrived was never a failure);
+        # claims.py's sticky-cancelled rule already protects against this
+        # wrongly reviving an order a same-or-stronger-authority claim
+        # already marked cancelled.
+        order_number = classification.order_number
+        delivered_at = target.parse_delivered_at(body)
+        return [
+            Claim(
+                external_id=f"{message_id}:arrived",
+                status="success",
+                site=site,
+                order_number=order_number,
+                shipping_status="delivered",
+                tracking_detail=f"Delivered {delivered_at}" if delivered_at else "Delivered",
+                occurred_at=occurred_at,
+            )
+        ]
+
     if classification.kind == EmailKind.CANCELLED_PARTIAL:
-        # Subject only carries the last 3-4 digits (see classify.py) --
-        # the full number has to come from the body, and unlike every
-        # other kind here there is no subject-derived fallback if that
-        # fails. Without order_number this claim can't be matched to
-        # anything (app/matching.find_cart requires one), so
-        # materialize_order would create an ORPHANED "cancelled" order
-        # with no way to connect it to the real cart it was meant to
-        # cancel -- worse than surfacing nothing, same discipline as
+        # Two real subject shapes land here (see classify.py): the
+        # "ending in NNNN" template carries only the last 3-4 digits in
+        # the subject, so the full number has to come from the body --
+        # but the "cancel items in order #NNNN" template (found live
+        # 2026-09-21) gives the FULL number right in the subject, more
+        # reliably than re-parsing it out of the body. Prefer the
+        # subject-derived one when present, same pattern as
+        # CONFIRMATION/SHIPPED above. Without an order_number this claim
+        # can't be matched to anything (app/matching.find_cart requires
+        # one), so materialize_order would create an ORPHANED "cancelled"
+        # order with no way to connect it to the real cart it was meant
+        # to cancel -- worse than surfacing nothing, same discipline as
         # every reconciliation check in the parsers this connects to.
-        order_number = target.parse_cancellation_order_number(body)
+        order_number = classification.order_number or target.parse_cancellation_order_number(body)
         if order_number is None:
             return []
         lines = target.parse_cancelled_lines(body)

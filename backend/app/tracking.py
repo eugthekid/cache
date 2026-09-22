@@ -9,9 +9,18 @@ account, no key, and no network -- a tracking number's FORMAT identifies its
 carrier on its own. That covers the two things worth having immediately (know
 who's carrying it, click straight through to the carrier's own page) without
 blocking on a provider decision. `TrackingProvider` below is the interface a
-real integration (AfterShip / EasyPost / carrier-direct) implements to fill in
-live status and an ETA; until one is configured, `resolve_provider()` returns
-None and callers simply skip the live half.
+real integration implements to fill in live status and an ETA; when no
+provider is configured, `resolve_provider()` returns None and callers simply
+skip the live half.
+
+LIVE PROVIDER, as of 2026-09-19: 17TRACK (app/tracking_providers/
+seventeen_track.py), chosen for a genuinely free tier at this app's scale
+(100 tracking-number registrations/month, no card, unlimited re-checks
+after registering) over AfterShip (API access needs its $70/mo paid tier)
+and EasyPost/Shippo (built for generating shipping labels; tracking-only
+has no real free tier). Deliberately swappable: this module and
+TrackingUpdate only ever expose generic fields, so a future switch is a
+new file in tracking_providers/ and one line here, not a schema change.
 
 MATCHING DISCIPLINE, same as catalog.py and products.py: an AMBIGUOUS number
 returns None rather than a guess. Several carriers share the plain-N-digits
@@ -114,7 +123,19 @@ class TrackingProvider(Protocol):
 
 
 class TrackingUpdate:
-    """One provider's answer about one shipment."""
+    """
+    One provider's answer about one shipment.
+
+    `alert` is deliberately its own field, separate from `shipping_status`:
+    a provider-specific moment worth notifying about -- out for delivery,
+    available for pickup at a locker -- doesn't always map cleanly onto
+    Order's own coarse 5-value shipping_status enum, and inventing a new
+    enum value per provider-specific nuance would leak that provider's
+    vocabulary into the schema. `alert=True` says "tell the user now",
+    `detail` says why, in the provider's own words; the poller is what
+    turns that into an actual notification, edge-triggered on `detail`
+    actually changing so the same status doesn't re-alert every cycle.
+    """
 
     def __init__(
         self,
@@ -122,20 +143,28 @@ class TrackingUpdate:
         estimated_delivery: Optional[str] = None,
         carrier: Optional[str] = None,
         detail: Optional[str] = None,
+        alert: bool = False,
     ) -> None:
         self.shipping_status = shipping_status
         self.estimated_delivery = estimated_delivery
         self.carrier = carrier
         self.detail = detail
+        self.alert = alert
 
 
-def resolve_provider() -> Optional[TrackingProvider]:
+def resolve_provider(api_key: Optional[str] = None) -> Optional[TrackingProvider]:
     """
     The configured live-tracking provider, or None when there isn't one.
 
-    None today, by design: no provider has been chosen yet (see this
-    module's docstring). Callers must treat None as "skip the live refresh",
-    never as an error -- the offline half of this module keeps working
-    either way.
+    Takes the credential as a plain argument rather than reading a config
+    file itself -- same separation as email_poller.py: routers/
+    tracking_account.py and tracking_poller.py own reading
+    tracking.env, this function just builds the provider object. None
+    when api_key is falsy, so every caller can pass through whatever it
+    read without an extra "is this configured" branch of its own.
     """
-    return None
+    if not api_key:
+        return None
+    from app.tracking_providers.seventeen_track import SeventeenTrackProvider
+
+    return SeventeenTrackProvider(api_key)

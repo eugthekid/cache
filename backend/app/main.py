@@ -12,9 +12,9 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
-from app import crud, email_poller
+from app import crud, email_poller, tracking_poller
 from app.database import get_db
-from app.routers import backup, bot_service, catalog, dashboard, discord, email_account, inventory, license, orders, products, sources, sync
+from app.routers import backup, bot_service, catalog, dashboard, discord, email_account, inventory, license, orders, products, sources, sync, tracking_account
 from app.routers import import_ as import_router
 from app.routers import settings as settings_router
 
@@ -27,10 +27,13 @@ async def lifespan(_app: FastAPI):
     # poller is a daemon thread inside THIS process, which is why it
     # only needs starting/stopping here and after every successful
     # /email/configure (see routers/email_account.py) rather than
-    # anything install/uninstall-shaped.
+    # anything install/uninstall-shaped. tracking_poller.py is the same
+    # shape, for the live-tracking provider (see routers/tracking_account.py).
     email_poller.start()
+    tracking_poller.start()
     yield
     email_poller.stop()
+    tracking_poller.stop()
 
 
 app = FastAPI(title="Inventory Tracker API", lifespan=lifespan)
@@ -61,6 +64,7 @@ app.include_router(sync.router)
 app.include_router(bot_service.router)
 app.include_router(catalog.router)
 app.include_router(products.router)
+app.include_router(tracking_account.router)
 
 
 @app.get("/health")

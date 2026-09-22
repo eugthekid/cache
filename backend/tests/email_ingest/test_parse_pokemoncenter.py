@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from app.email_ingest.parse_pokemoncenter import parse_confirmation, parse_order_number, parse_purchased_at
+from app.email_ingest.parse_pokemoncenter import parse_confirmation, parse_order_number, parse_purchased_at, parse_ship_to_address
 
 BODY = """ Pokémon Center
 We’re working on your order. Please review your order confirmation details inside.
@@ -123,6 +123,12 @@ if len(lines) == 3:
     # (to floating-point precision) -- the whole reason per-line rounding
     # was dropped. Rounding only HERE, at display/assertion time, is safe.
     check("allocated total reconciles to Order Total ($163.27)", round(total_allocated, 2), 163.27)
+
+check(
+    "ship_to_address",
+    parse_ship_to_address(BODY),
+    "Eugene Seo 220 Malt Dr Apartment 15 Long Island City, Ny 11101 US",
+)
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

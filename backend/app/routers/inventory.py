@@ -72,10 +72,11 @@ def inventory_summary(db: Session = Depends(get_db)):
     have a real cost basis but no purchase to attribute it to. Don't
     "reconcile" these two numbers; they answer different questions.
     `est_inventory_value` is narrower still: only cost_basis for units
-    actually still held (in_hand/listed), not sold/returned/lost ones.
+    actually still held or on the way (not_shipped/in_transit/in_hand --
+    see crud.SHIPPABLE_ITEM_STATUSES), not sold/returned/lost ones.
     """
     items = crud.live_items(db).all()
-    unsold_statuses = {"in_hand", "listed"}
+    unsold_statuses = crud.SHIPPABLE_ITEM_STATUSES
 
     # PRICED sold units only, matching how /products/grouped computes
     # avg_sale_price and total_profit: a unit marked sold without a
@@ -87,8 +88,9 @@ def inventory_summary(db: Session = Depends(get_db)):
 
     return {
         "total_units": len(items),
+        "not_shipped": sum(1 for i in items if i.status == "not_shipped"),
+        "in_transit": sum(1 for i in items if i.status == "in_transit"),
         "in_hand": sum(1 for i in items if i.status == "in_hand"),
-        "listed": sum(1 for i in items if i.status == "listed"),
         "sold": sum(1 for i in items if i.status == "sold"),
         "total_cost_basis": sum(i.cost_basis or 0 for i in items),
         # 0-inclusive, kept as-is for existing callers.

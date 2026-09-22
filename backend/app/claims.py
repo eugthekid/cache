@@ -19,10 +19,19 @@ Discord backfill must never revert a tax-inclusive price back to the cart
 price it saw at checkout. So precedence lives HERE, in the field rules --
 not in the pipeline.
 
-THE RULE: authority beats recency; recency breaks ties within one source.
-That second half is what makes a cancellation supersede a confirmation
-without any special handling -- it is simply a later claim from the same
-source.
+THE RULE: authority beats recency; recency breaks ties within one source --
+with one exception. A same-source claim can never un-cancel an order: once
+any claim has won 'cancelled' for the status field, only a STRONGER-authority
+claim can move it off that value. This was not the original design -- the
+rule used to be pure recency, on the theory that a cancellation email is
+simply a later claim from the same source. Live data disproved that: a
+retailer's own cancellation and confirmation for the same order routinely
+land seconds apart in one transactional burst, and the confirmation's Date
+header is frequently the LATER of the two by nothing more than mail-queue
+jitter. Recency-wins silently reverted dozens of real cancelled orders back
+to 'success'. Cancellation is a terminal business state that email timing
+cannot be trusted to order correctly, so it is now sticky by field rule
+rather than by timestamp.
 
 Two properties this buys, both load-bearing:
 
@@ -237,11 +246,15 @@ def resolve(claims: Iterable[Claim]) -> dict[str, Any]:
             if current is None:
                 winners[field] = (rank, when, value)
                 continue
-            current_rank, current_when, _ = current
-            # Stronger authority wins outright, whenever it arrived.
-            # Equal authority falls back to the later claim -- which is
-            # exactly how a cancellation email supersedes the confirmation
-            # that preceded it, with no special-casing.
+            current_rank, current_when, current_value = current
+
+            # 'status' is NOT symmetric like every other field -- see the
+            # STATUS IS STICKY block below for why. Every other field keeps
+            # the original rule: stronger authority wins outright, equal
+            # authority falls back to the later claim.
+            if field == "status" and current_value == "cancelled" and value != "cancelled" and rank >= current_rank:
+                continue
+
             if rank < current_rank or (rank == current_rank and when >= current_when):
                 winners[field] = (rank, when, value)
 

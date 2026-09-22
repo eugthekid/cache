@@ -93,6 +93,12 @@ if len(claims) == 3:
     check("PC confirmation claim 0 occurred_at (from Date header)", claims[0].occurred_at, EXPECTED_OCCURRED_AT)
     check("PC confirmation claim 1 external_id (distinct index)", claims[1].external_id, "msg-pc-confirm@mail:confirm:1")
     check("PC confirmation claim 2 unit_price is a real tax-allocated number", round(claims[2].unit_price, 2), 16.32)
+    # This trimmed fixture never had a "Shipping Address:" block to begin
+    # with -- see test_parse_pokemoncenter.py and
+    # test_parse_pokemoncenter_ship_to_address.py for the extraction
+    # itself; this just confirms the wiring doesn't crash or invent one
+    # when the marker is absent.
+    check("PC confirmation claim 0 ship_to_address (absent from this fixture)", claims[0].ship_to_address, None)
 
 # --- Pokemon Center shipped (order P0038927021, thread 1a0a5ce2cc85a81b) ---
 PC_SHIP_SUBJECT = "Your Pokémon Center order is on its way!"
@@ -243,6 +249,7 @@ if len(t_confirm_claims) == 1:
     # Order total; this just confirms ingest.py passes it through
     # unchanged.
     check("Target confirmation unit_price reconciles to Order total", round(c.unit_price * c.quantity, 2), 130.63)
+    check("Target confirmation ship_to_address", c.ship_to_address, "Eugene Seo, 5306 217th Street, Oakland Gardens, NY 11364")
 
 # --- Target shipped (order 902003598796944, thread 1a0ac89cbf63d317) ---
 # Subject copied byte-for-byte from the real fetch, NO space before
@@ -325,6 +332,65 @@ PS Placeholder 2025
 
   Shop your other favorites instead
 """
+
+# --- Target arrived (order 912003448396552, trimmed from real mail, uid 281228) ---
+TARGET_ARRIVED_SUBJECT = "Items have arrived from order #912003448396552!"
+TARGET_ARRIVED_BODY = """Order #912003448396552
+
+ Eugene, items from your order have arrived
+
+ Delivered June 1, 2026
+
+ Time to kick up your feet, settle in and enjoy your new stuff.
+
+Pokémon Trading Card Game: Mega Evolution Chaos Rising Elite Trainer Box
+
+ Qty: 2
+
+Delivered on Mon, Jun 1, 2026
+"""
+
+t_arrived_claims = build_claims(TARGET_ARRIVED_SUBJECT, TARGET_ARRIVED_BODY, "msg-t-arrived@mail", parse_email_date(DATE_HEADER))
+check("Target arrived: 1 claim", len(t_arrived_claims), 1)
+if len(t_arrived_claims) == 1:
+    c = t_arrived_claims[0]
+    check("Target arrived status (a true assertion, sticky-cancelled protects the rest)", c.status, "success")
+    check("Target arrived order_number (from subject)", c.order_number, "912003448396552")
+    check("Target arrived shipping_status", c.shipping_status, "delivered")
+    check("Target arrived tracking_detail carries the retailer's own delivered date", c.tracking_detail, "Delivered June 1, 2026")
+    check("Target arrived carries no line data (relies on matching.py's rule 5, same as full cancellation)", c.raw_product_text, None)
+    check("Target arrived external_id (single-claim event)", c.external_id, "msg-t-arrived@mail:arrived")
+
+# --- Target cancellation, THIRD subject shape (order 912003760839485,
+# found live 2026-09-21 cross-checking against an independent Gmail
+# read): full order number in the subject like CANCELLED_FULL, but a
+# "Canceled items" + Qty body like CANCELLED_PARTIAL. ---
+TARGET_CANCEL_ITEMS_SUBJECT = "Sorry we had to cancel items in order #912003760839485."
+TARGET_CANCEL_ITEMS_BODY = """Order #912003760839485
+
+ Sorry we had
+to cancel your items
+
+ Hi Eugene,
+
+Thanks so much for placing your recent order #
+912003760839485 . We went to grab the items listed below, but it looks like someone snagged the last of them.
+
+ Canceled items
+
+Pokémon Trading Card Game: 30th Celebration Sylveon ex Box
+
+ Qty: 2
+"""
+
+t_cancel_items_claims = build_claims(TARGET_CANCEL_ITEMS_SUBJECT, TARGET_CANCEL_ITEMS_BODY, "msg-t-cancel-items@mail", parse_email_date(DATE_HEADER))
+check("Target cancel-items (3rd subject shape): 1 claim", len(t_cancel_items_claims), 1)
+if len(t_cancel_items_claims) == 1:
+    c = t_cancel_items_claims[0]
+    check("Target cancel-items status", c.status, "cancelled")
+    check("Target cancel-items order_number comes from the SUBJECT, not re-parsed from the body", c.order_number, "912003760839485")
+    check("Target cancel-items product name", c.raw_product_text, "Pokémon Trading Card Game: 30th Celebration Sylveon ex Box")
+    check("Target cancel-items quantity", c.quantity, 2)
 
 t_cancel_partial_claims = build_claims(
     TARGET_CANCEL_PARTIAL_SUBJECT, TARGET_CANCEL_PARTIAL_BODY, "msg-t-cancel-partial@mail", parse_email_date(DATE_HEADER)

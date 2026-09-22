@@ -55,6 +55,12 @@ class OrderCreate(BaseModel):
     # 'not_shipped' | 'label_created' | 'in_transit' | 'delivered' | 'exception'
     shipping_status: str = "not_shipped"
     tracking_number: Optional[str] = None
+    # The carrier/retailer's own latest scan description, verbatim (e.g.
+    # "Delivered June 1, 2026") -- same missing-field gap external_sku
+    # had before it: declared in claims.CLAIMED_FIELDS and on the Order
+    # model already, but never reachable from an inbound claim until a
+    # real caller (Target's ARRIVED claim) needed it.
+    tracking_detail: Optional[str] = None
     ship_to_label: Optional[str] = None
     ship_to_address: Optional[str] = None
     purchased_at: Optional[datetime] = None
@@ -150,7 +156,7 @@ class InventoryItemCreate(BaseModel):
 
     product_text: str
     quantity: int = 1
-    status: str = "in_hand"  # 'in_hand' | 'listed' | 'sold' | 'returned' | 'lost'
+    status: str = "in_hand"  # 'not_shipped' | 'in_transit' | 'in_hand' | 'sold' | 'returned' | 'lost'
     cost_basis: Optional[float] = None
     location: Optional[str] = None
     notes: Optional[str] = None
@@ -158,13 +164,16 @@ class InventoryItemCreate(BaseModel):
 
 class InventoryItemUpdate(BaseModel):
     """
-    Covers the whole lifecycle a unit moves through: in_hand -> listed ->
-    sold (or returned/lost at any point). `sold_at` is optional on purpose
-    -- if a client marks something sold without sending a timestamp,
-    crud.update_inventory_item fills in "now" rather than leaving it null.
+    Covers the whole lifecycle a unit moves through: not_shipped ->
+    in_transit -> in_hand -> sold (or returned/lost at any point; the
+    first three are normally automatic, see crud.reconcile_order_inventory,
+    but stay editable here for a manual correction). `sold_at` is optional
+    on purpose -- if a client marks something sold without sending a
+    timestamp, crud.update_inventory_item fills in "now" rather than
+    leaving it null.
     """
 
-    status: Optional[str] = None  # 'in_hand' | 'listed' | 'sold' | 'returned' | 'lost'
+    status: Optional[str] = None  # 'not_shipped' | 'in_transit' | 'in_hand' | 'sold' | 'returned' | 'lost'
     product_text: Optional[str] = None
     cost_basis: Optional[float] = None
     location: Optional[str] = None
@@ -238,7 +247,7 @@ class BulkOrderStatusUpdate(BaseModel):
 
 class BulkInventoryStatusUpdate(BaseModel):
     ids: list[str]
-    status: str  # 'in_hand' | 'listed' | 'sold' | 'returned' | 'lost'
+    status: str  # 'not_shipped' | 'in_transit' | 'in_hand' | 'sold' | 'returned' | 'lost'
 
 
 class BulkResult(BaseModel):
@@ -275,10 +284,20 @@ class ProductGroup(BaseModel):
     product_id: Optional[str]
     name: Optional[str]
     total_units: int
+    # Pre-delivery pipeline, in order: not_shipped -> in_transit -> in_hand.
+    # See crud.item_status_for_shipping for how a unit moves between these
+    # automatically as its order's shipping_status updates from email or
+    # live tracking -- 'listed' is gone (nothing sets it anymore).
+    not_shipped: int
+    in_transit: int
     in_hand: int
-    listed: int
     sold: int
     total_cost_basis: float
+    # total_cost_basis / units actually carrying a recorded cost -- NOT
+    # total_cost_basis / total_units, which would understate the average
+    # by diluting it with units nobody ever priced (imports, manual adds
+    # with no purchase price). None when nothing here has a price at all.
+    avg_cost_basis: Optional[float] = None
     total_sold_revenue: float
     # None when nothing's sold yet -- distinct from 0, which would claim
     # units sold for free.
@@ -439,6 +458,24 @@ class EmailStatus(BaseModel):
     # in-process thread the backend itself owns, so "configured" and
     # "running" converge to the same thing except for the brief window
     # right after a save.
+    polling: bool = False
+
+
+class TrackingConfigIn(BaseModel):
+    """What Settings' 'Connect tracking' form submits. Just the one
+    credential -- 17TRACK needs no username/address the way email does."""
+
+    api_key: str
+
+
+class TrackingStatus(BaseModel):
+    configured: bool
+    provider: Optional[str] = None
+    # Last 4 characters only -- same convention as EmailStatus.app_password_suffix.
+    api_key_suffix: Optional[str] = None
+    # Whether app/tracking_poller.py's background thread is alive right
+    # now -- same in-process-thread shape as email_poller.py, not a
+    # separate installed service.
     polling: bool = False
 
 

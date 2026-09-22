@@ -96,7 +96,7 @@ export interface CurrentUser {
 
 export type OrderStatus = 'success' | 'failed' | 'cancelled' | 'pending'
 export type ShippingStatus = 'not_shipped' | 'label_created' | 'in_transit' | 'delivered' | 'exception'
-export type InventoryStatus = 'in_hand' | 'listed' | 'sold' | 'returned' | 'lost'
+export type InventoryStatus = 'not_shipped' | 'in_transit' | 'in_hand' | 'sold' | 'returned' | 'lost'
 
 export interface Source {
   id: string
@@ -193,8 +193,9 @@ export interface InventoryItemCreate {
 
 export interface InventorySummary {
   total_units: number
+  not_shipped: number
+  in_transit: number
   in_hand: number
-  listed: number
   sold: number
   total_cost_basis: number
   total_sold_revenue: number
@@ -279,6 +280,17 @@ export interface EmailConfigIn {
   app_password?: string
 }
 
+export interface TrackingStatus {
+  configured: boolean
+  provider: string | null
+  api_key_suffix: string | null
+  polling: boolean
+}
+
+export interface TrackingConfigIn {
+  api_key: string
+}
+
 export type OrderSort =
   | 'date_desc'
   | 'date_asc'
@@ -317,10 +329,17 @@ export interface ProductGroup {
   product_id: string | null
   name: string | null
   total_units: number
+  /** Pre-delivery pipeline, in order: not_shipped -> in_transit -> in_hand,
+   * kept in step automatically as an order's shipping_status updates from
+   * email or live tracking. 'listed' is gone -- nothing sets it anymore. */
+  not_shipped: number
+  in_transit: number
   in_hand: number
-  listed: number
   sold: number
   total_cost_basis: number
+  /** total_cost_basis / units actually carrying a recorded purchase price
+   * -- null when nothing in the group has one. */
+  avg_cost_basis: number | null
   total_sold_revenue: number
   /** null when nothing's sold yet -- distinct from 0 (which would claim
    * units sold for free). */
@@ -555,6 +574,12 @@ export const api = {
   email: {
     status: () => get<EmailStatus>('/email/status'),
     configure: (body: EmailConfigIn) => post<EmailStatus>('/email/configure', body)
+  },
+
+  tracking: {
+    status: () => get<TrackingStatus>('/tracking/status'),
+    configure: (body: TrackingConfigIn) => post<TrackingStatus>('/tracking/configure', body),
+    disconnect: () => post<TrackingStatus>('/tracking/disconnect')
   },
 
   products: {

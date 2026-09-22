@@ -279,7 +279,13 @@ class InventoryItem(Base):
     # is exactly one place to fix if a product is ever re-identified.
     product_id: Mapped[str | None] = mapped_column(ForeignKey("products.id"), default=None)
 
-    # 'in_hand' | 'listed' | 'sold' | 'returned' | 'lost'
+    # 'not_shipped' | 'in_transit' | 'in_hand' | 'sold' | 'returned' | 'lost'
+    # -- the first three are owned by crud.reconcile_order_inventory,
+    # which moves a unit between them automatically as its order's
+    # shipping_status updates (see crud.item_status_for_shipping); a
+    # unit with no order (manual add, spreadsheet import) starts
+    # 'in_hand' directly, since there's no shipment to track. 'listed' is
+    # retired -- nothing sets it anymore.
     status: Mapped[str] = mapped_column(default="in_hand")
 
     cost_basis: Mapped[float | None] = mapped_column(default=None)

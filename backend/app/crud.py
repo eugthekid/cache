@@ -312,19 +312,13 @@ def materialize_order(
     db.commit()
     db.refresh(order)
 
-    if order.status == "success":
-        quantity = order.quantity or 1
-        for unit_index in range(1, quantity + 1):
-            db.add(
-                models.InventoryItem(
-                    user_id=user_id,
-                    order_id=order.id,
-                    unit_index=unit_index,
-                    status="in_hand",
-                    cost_basis=order.unit_price,
-                )
-            )
-        db.commit()
+    # Same function a later resolve/live-tracking update uses to keep
+    # units in step with shipping progress -- creating them here with the
+    # RIGHT initial status (not_shipped/in_transit/in_hand, whatever this
+    # order's shipping_status already says) rather than always hardcoding
+    # 'in_hand' and hoping a later pass corrects it.
+    reconcile_order_inventory(db, order)
+    db.commit()
 
     return order
 
@@ -430,26 +424,80 @@ def sync_tracking_fields(order: models.Order, previous_shipping_status: Optional
         order.shipping_alert_seen_at = None
 
 
+# Statuses this reconciliation pipeline owns and will freely move a unit
+# between as an order's shipping progress changes. Deliberately excludes
+# 'sold' | 'returned' | 'lost' -- those are the user's own actions, and
+# must never be touched just because a later email or live-tracking
+# update says something about the ORDER. 'listed' is gone: nothing sets
+# it anymore (see AddInventoryItem.tsx/BulkEditItems.tsx), but an old row
+# that somehow still carries it is deliberately left alone here rather
+# than silently reclassified -- same "never touch what wasn't ours to
+# begin with" rule.
+SHIPPABLE_ITEM_STATUSES: frozenset[str] = frozenset({"not_shipped", "in_transit", "in_hand"})
+
+
+def item_status_for_shipping(shipping_status: Optional[str]) -> Optional[str]:
+    """
+    What a unit's own status should be, given its order's current
+    shipping_status -- the single place this mapping lives, used at
+    creation time and every later resync alike.
+
+    Returns None for 'exception' (and any future unmapped value),
+    DELIBERATELY not a status string: it's a shipping ALERT (see
+    sync_tracking_fields), not a lifecycle state, and guessing whether an
+    exception-flagged package is still coming or already lost would be
+    exactly the kind of thing this app refuses to do elsewhere. Callers
+    that are SYNCING an existing unit must treat None as "leave it
+    alone" -- confirmed by this function's own test
+    (test_reconcile_order_inventory.py): an early version returned
+    'not_shipped' as a fallback here, which silently knocked an
+    already-in_hand unit backward the moment a live tracking check
+    flagged an exception on an otherwise-delivered order. Callers
+      creating a BRAND NEW unit (which needs some starting status
+    regardless) fall back to 'not_shipped' themselves rather than this
+    function inventing one.
+    """
+    if shipping_status == "delivered":
+        return "in_hand"
+    if shipping_status == "in_transit":
+        return "in_transit"
+    if shipping_status in (None, "not_shipped", "label_created"):
+        return "not_shipped"
+    return None  # 'exception' and anything else unmapped
+
+
 def reconcile_order_inventory(db: Session, order: models.Order) -> None:
     """
     Keeps an order's inventory units consistent with its status AFTER the
-    order was first ingested.
+    order was first ingested -- the coarse success/cancelled split below,
+    which pre-delivery status a still-in-the-pipeline unit carries
+    (not_shipped -> in_transit -> in_hand, see item_status_for_shipping),
+    and a still-missing cost_basis, backfilled the moment the order's own
+    unit_price becomes known.
 
     materialize_order() only creates units at INGEST time, gated on
     status == 'success' at that moment -- it has no way to react to a
-    LATER status edit, whether that's the user correcting a mistake or a
-    bulk status change. Without this, an order edited to 'cancelled' after
-    its units were already created keeps them forever (confirmed live:
-    two Discord orders retailer-cancelled after the fact were still
-    holding 4 phantom units), and an order corrected the other way, INTO
-    'success', never gets any.
+    LATER status edit, whether that's the user correcting a mistake, a
+    bulk status change, or (now) a shipping notice or live-tracking check
+    changing the order's shipping_status well after the units already
+    exist. Without this, an order edited to 'cancelled' after its units
+    were already created keeps them forever (confirmed live: two Discord
+    orders retailer-cancelled after the fact were still holding 4 phantom
+    units), an order corrected the other way, INTO 'success', never gets
+    any, and (found live 2026-09-22, auditing this exact function) a unit
+    that shipped or got delivered after creation just sat there forever
+    still saying 'in_hand' from the moment checkout succeeded -- 323 of
+    473 "in hand" units, checked live, hadn't actually been delivered yet.
 
-    Conservative on purpose: only touches units still 'in_hand'. A unit
-    that's been listed or sold is a real action the user took -- it must
-    never be silently deleted just because an order's status changed
-    later, whatever the retailer says about the order itself. Soft
-    delete, not hard: the order isn't being deleted, just re-classified,
-    and a status corrected back to 'success' should un-cancel cleanly.
+    Conservative on purpose: only ever touches units whose status is
+    still in SHIPPABLE_ITEM_STATUSES. A unit that's been sold, returned,
+    lost, or otherwise moved outside that set is a real action the user
+    took -- it must never be silently reclassified or deleted just
+    because an order's status or shipping_status changed later, whatever
+    the retailer (or a live carrier check) says about the order itself.
+    Soft delete, not hard, on cancellation: the order isn't being
+    deleted, just re-classified, and a status corrected back to 'success'
+    should un-cancel cleanly.
     """
     live_items = (
         db.query(models.InventoryItem)
@@ -457,48 +505,100 @@ def reconcile_order_inventory(db: Session, order: models.Order) -> None:
         .filter(models.InventoryItem.deleted_at.is_(None))
         .all()
     )
+
+    # Backfill a still-missing cost_basis, for EVERY live item regardless
+    # of status -- purely additive (never overwrites a value that's
+    # already there), so unlike the status sync below this isn't gated to
+    # SHIPPABLE_ITEM_STATUSES: a sold unit's profit calc needs a real
+    # cost_basis too. Found live 2026-09-22: a unit created from a
+    # Discord-only claim (no price yet) never got cost_basis backfilled
+    # once the retailer's own confirmation email later resolved
+    # order.unit_price to a real number -- 158 live units, checked, had a
+    # known order price but a null cost_basis. materialize_order() only
+    # ever set cost_basis ONCE, at creation time; nothing revisited it
+    # when the order's own price later became known.
+    if order.unit_price is not None:
+        for item in live_items:
+            if item.cost_basis is None:
+                item.cost_basis = order.unit_price
+
     if order.status == "success":
-        if not live_items:
+        target_status = item_status_for_shipping(order.shipping_status)
+        # New units (restored or freshly created) need SOME starting
+        # status regardless -- fall back to 'not_shipped' rather than
+        # leaving a row with no real status when target_status is None
+        # (an 'exception' order that somehow has no units yet at all).
+        creation_status = target_status or "not_shipped"
+
+        quantity = order.quantity or 1
+        missing = quantity - len(live_items)
+        if missing > 0:
             # RESTORE BEFORE CREATING. These units were soft-deleted by an
             # earlier pass of this same function when the order left
-            # 'success', and they carry things the user put there by hand
-            # -- a storage location, notes. Creating fresh rows instead
-            # would orphan all of that behind new ids and leave the old
-            # ones dead forever.
+            # 'success' (or never existed at all), and restored ones
+            # carry things the user put there by hand -- a storage
+            # location, notes. Creating fresh rows instead would orphan
+            # all of that behind new ids and leave the old ones dead
+            # forever.
             #
-            # This mattered little while a status flip was a deliberate
-            # manual act. It matters a lot now that a cancellation email
-            # can flip it automatically and a correction can flip it back,
-            # with nobody watching.
+            # Checked by MISSING count, not "zero live items" -- found
+            # live by this function's own test (2026-09-22): the old
+            # "if not live_items" gate meant a unit that survived
+            # cancellation (already sold, so never soft-deleted) silently
+            # blocked every OTHER soft-deleted unit on that same order
+            # from ever being restored, since live_items was never empty
+            # to begin with.
             restorable = (
                 db.query(models.InventoryItem)
                 .filter(models.InventoryItem.order_id == order.id)
                 .filter(models.InventoryItem.deleted_at.isnot(None))
-                .filter(models.InventoryItem.status == "in_hand")
+                .filter(models.InventoryItem.status.in_(SHIPPABLE_ITEM_STATUSES))
                 .order_by(models.InventoryItem.unit_index)
                 .all()
             )
-            quantity = order.quantity or 1
-            for item in restorable[:quantity]:
+            to_restore = restorable[:missing]
+            for item in to_restore:
                 item.deleted_at = None
+                item.status = creation_status
 
             # Only top up whatever restoring didn't cover -- a quantity
             # that grew since the cancellation, or units that never
-            # existed at all.
-            for unit_index in range(len(restorable[:quantity]) + 1, quantity + 1):
-                db.add(
-                    models.InventoryItem(
-                        user_id=order.user_id,
-                        order_id=order.id,
-                        unit_index=unit_index,
-                        status="in_hand",
-                        cost_basis=order.unit_price,
+            # existed at all. unit_index continues past every index this
+            # order has EVER used (live, soft-deleted, or just restored)
+            # so a freshly created unit can never collide with one that's
+            # simply hidden right now.
+            still_missing = missing - len(to_restore)
+            if still_missing > 0:
+                all_indices = [
+                    i.unit_index
+                    for i in db.query(models.InventoryItem.unit_index)
+                    .filter(models.InventoryItem.order_id == order.id)
+                ]
+                next_index = (max(all_indices) if all_indices else 0) + 1
+                for offset in range(still_missing):
+                    db.add(
+                        models.InventoryItem(
+                            user_id=order.user_id,
+                            order_id=order.id,
+                            unit_index=next_index + offset,
+                            status=creation_status,
+                            cost_basis=order.unit_price,
+                        )
                     )
-                )
+
+        # Keep every unit still in the automatic pipeline (including ones
+        # just restored/created above) in step with shipping progress.
+        # None means 'exception' or an otherwise-unmapped status -- leave
+        # units exactly as they are rather than force a guess.
+        if target_status is not None:
+            db.flush()
+            for item in live_items:
+                if item.status in SHIPPABLE_ITEM_STATUSES:
+                    item.status = target_status
     else:
         now = _now()
         for item in live_items:
-            if item.status == "in_hand":
+            if item.status in SHIPPABLE_ITEM_STATUSES:
                 item.deleted_at = now
 
 

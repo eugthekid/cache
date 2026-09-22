@@ -16,7 +16,7 @@ import { datePatchValue, toDateInput } from '../dates'
 
 type ViewMode = 'units' | 'grouped'
 
-const ITEM_STATUSES: InventoryStatus[] = ['in_hand', 'listed', 'sold', 'returned', 'lost']
+const ITEM_STATUSES: InventoryStatus[] = ['not_shipped', 'in_transit', 'in_hand', 'sold', 'returned', 'lost']
 
 type InventorySort = 'units_desc' | 'name_asc' | 'name_desc' | 'value_desc' | 'value_asc'
 
@@ -623,9 +623,7 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
                   const saleText =
                     item.status === 'sold' && item.sold_price != null
                       ? `$${item.sold_price.toFixed(2)} ${item.sold_platform ?? ''}`
-                      : item.status === 'listed' && item.listed_price != null
-                        ? `$${item.listed_price.toFixed(2)} ${item.listed_platform ?? ''}`
-                        : '—'
+                      : '—'
                   return (
                     <tr
                       key={item.id}
@@ -694,17 +692,6 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
               <Field label="Location">
                 <input className="field-input" value={draft.location} onChange={(e) => updateDraft('location', e.target.value)} placeholder="Closet A, Storage bin 3…" />
               </Field>
-            )}
-
-            {draft.status === 'listed' && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <Field label="Listed price">
-                  <input className="field-input num" type="number" step="0.01" value={draft.listed_price} onChange={(e) => updateDraft('listed_price', e.target.value)} />
-                </Field>
-                <Field label="Platform">
-                  <input className="field-input" value={draft.listed_platform} onChange={(e) => updateDraft('listed_platform', e.target.value)} placeholder="eBay" />
-                </Field>
-              </div>
             )}
 
             {draft.status === 'sold' && (

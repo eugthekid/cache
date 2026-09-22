@@ -190,5 +190,64 @@ check("all 3 candidates were at least attempted", sorted(fake_imap.fetched_uids)
 
 db2.close()
 
+
+# --- test 3: an ingestion-level failure must not roll back EARLIER,
+# already-successful claims from the same poll cycle -----------------------
+# THE BUG THIS GUARDS AGAINST, FOUND WHILE AUDITING _run_once (2026-09-18):
+# it used to call db.commit() only ONCE, at the very end of the whole
+# cycle. A claim that failed at the INGESTION step (schemas.OrderCreate
+# validation or crud.ingest_order itself -- as opposed to a PARSE failure,
+# which test 2 above already covers and never touches the db session)
+# called db.rollback() in its except block, which reverts the ENTIRE
+# uncommitted session, not just that one claim's work -- confirmed by a
+# direct SQLAlchemy reproduction outside this codebase.
+#
+# THE ACTUAL BLAST RADIUS, checked carefully rather than assumed: an
+# order's own row turned out to already be safe -- crud.materialize_order()
+# commits internally before crud.ingest_order() returns. What was NOT
+# committed by the time ingest_order() returns is its LAST step,
+# catalog.find_catalog_matches() (product auto-matching against the
+# catalog cache) plus the db.refresh(order) after it -- neither commits.
+# So the real, narrower bug was: a later claim's ingestion failure in the
+# same cycle could silently revert an EARLIER claim's catalog-match state
+# (and any other future post-order-creation step added to ingest_order
+# that doesn't commit its own work), while the order itself stayed intact.
+# This test still pins the stronger, simpler invariant end-to-end (a later
+# claim's failure must never touch an earlier claim's committed work) so
+# it keeps guarding this even if ingest_order's internals change again.
+GOOD_BODY_3 = GOOD_BODY.replace("P0000000001", "P0000000003")
+
+db3, user3 = make_user_and_db()
+
+candidates3 = [
+    Candidate(uid=1, subject=PC_CONFIRM_SUBJECT, message_id="msg-a", date="Wed, 15 Jul 2026 09:00:00 +0000"),
+    Candidate(uid=2, subject=PC_CONFIRM_SUBJECT, message_id="msg-b-flaky", date="Wed, 15 Jul 2026 09:01:00 +0000"),
+    Candidate(uid=3, subject=PC_CONFIRM_SUBJECT, message_id="msg-c", date="Wed, 15 Jul 2026 09:02:00 +0000"),
+]
+bodies3 = {1: GOOD_BODY, 2: GOOD_BODY_2, 3: GOOD_BODY_3}
+
+fake_imap3 = FakeImapClient("addr", "pw", candidates3, bodies3)
+
+real_ingest_order = email_poller.crud.ingest_order
+
+
+def flaky_ingest_order(db, order_in):
+    if order_in.order_number == "P0000000002":
+        raise ValueError("simulated ingestion-level failure (not a parse failure)")
+    return real_ingest_order(db, order_in)
+
+
+with patch.object(email_poller, "ImapClient", lambda addr, pw: fake_imap3), \
+     patch.object(email_poller, "SessionLocal", lambda: db3), \
+     patch.object(email_poller.crud, "ingest_order", flaky_ingest_order):
+    email_poller._run_once("test3@example.com", "app-password")
+
+orders3 = db3.query(models.Order).all()
+check("message A (BEFORE the flaky claim) survives the later rollback", any(o.external_id == "msg-a:confirm:0" for o in orders3), True)
+check("message C (AFTER the flaky claim) still ingested", any(o.external_id == "msg-c:confirm:0" for o in orders3), True)
+check("the flaky message itself never created an order", any("msg-b-flaky" in o.external_id for o in orders3), False)
+
+db3.close()
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

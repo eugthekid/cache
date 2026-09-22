@@ -52,8 +52,13 @@ _SKU_ROW_RE = re.compile(
     r"SKU\s*\#\s*:\s*(?P<sku>[\w-]+).*?Qty\s*:\s*(?P<qty>\d+).*?Price\s*:\s*\$(?P<price>[\d,]+\.\d{2})"
 )
 # A plain "| name |" row -- deliberately excludes rows containing "SKU"
+# LEADING WHITESPACE TOLERATED (added after a live parse failure, see
+# _extract_no_price_lines' docstring): PC's cancellation template renders
+# through a more deeply nested HTML table than the confirmation fixture
+# this module was originally verified against, so real name/SKU rows can
+# carry indentation before the "|" rather than starting at column 0.
 # (the field row itself) so the two never get confused for each other.
-_NAME_ROW_RE = re.compile(r"^\|\s*([^|]+?)\s*\|\s*$")
+_NAME_ROW_RE = re.compile(r"^\s*\|\s*([^|]+?)\s*\|\s*$")
 
 _ORDER_NUMBER_RE = re.compile(r"Order Number:\s*([A-Z0-9]+)")
 _ORDER_DATE_RE = re.compile(r"Date Ordered:\s*([A-Za-z]+ \d{1,2}, \d{4})")
@@ -76,6 +81,21 @@ _TRACKING_RE = re.compile(r"Tracking Number:\s*([A-Za-z0-9]+)")
 # Price optional in _SKU_ROW_RE, so a confirmation row that's silently
 # missing its price (a real parse failure) still fails loudly there.
 _CANCEL_SKU_ROW_RE = re.compile(r"SKU\s*\#\s*:\s*(?P<sku>[\w-]+).*?Qty\s*:\s*(?P<qty>\d+)")
+
+# Fallback pair for the SAME row when SKU and Qty land on two separate
+# physical lines instead of one -- found live 2026-09-18 against a batch of
+# 18 real cancellation emails (all from 2026-09-07), none of which
+# _CANCEL_SKU_ROW_RE matched: PC's more-nested cancellation table wraps
+# "SKU #: ..." and "Qty: N" onto consecutive lines rather than one. Each
+# regex anchors the WHOLE line deliberately -- these emails also render the
+# same row 2-3 more times at shallower nesting, and those extra copies come
+# out mangled (a Qty and the NEXT item's SKU glued onto one line with no
+# line break between them). A whole-line anchor only matches the first,
+# clean copy and silently fails closed on the mangled ones, same "refuse to
+# guess" discipline as parse_confirmation's subtotal cross-check above --
+# a dropped duplicate is fine; a wrong pairing from a mangled row is not.
+_SKU_ONLY_ROW_RE = re.compile(r"^\s*\|?\s*SKU\s*\#\s*:\s*(?P<sku>[\w-]+)\s*$")
+_QTY_ONLY_ROW_RE = re.compile(r"^\s*Qty\s*:\s*(?P<qty>\d+)\s*\|?\s*$")
 
 
 @dataclass
@@ -192,6 +212,27 @@ def parse_order_number(body: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+# Verified live 2026-09-19 against real confirmation mail: the row reads
+# "| ... US | Shipping Address:\n<multi-line address>\nUS |" -- the SAME
+# "Shipping Address:" label PC used in an earlier single-line rendering
+# (see parse_confirmation's own module docstring precedent for this
+# template drifting between captures), now wrapped across several
+# indented lines instead of one. Bounded to the next "|" either way, so
+# both renderings are covered without needing two regexes.
+_SHIP_TO_RE = re.compile(r"Shipping Address:\s*([^|]+?)\s*\|", re.IGNORECASE)
+
+
+def parse_ship_to_address(body: str) -> Optional[str]:
+    """The confirmation's own "Shipping Address:" block, whitespace
+    (including the line-wrapping the real template uses) collapsed to a
+    single readable line. Returns None when the marker isn't found --
+    same discipline as every other parser here, never guessed."""
+    m = _SHIP_TO_RE.search(body)
+    if not m:
+        return None
+    return re.sub(r"\s+", " ", m.group(1)).strip() or None
+
+
 def parse_purchased_at(body: str) -> Optional[str]:
     """Returns the raw 'Month DD, YYYY' string; caller parses to a date --
     kept a plain string here so this module stays free of a datetime
@@ -234,13 +275,30 @@ def _extract_no_price_lines(body: str) -> list[NoPriceLine]:
     # blank separator row as the name in the first draft of that parser.
     out: list[NoPriceLine] = []
     pending_name: Optional[str] = None
+    pending_sku: Optional[str] = None
     for line in window.splitlines():
+        if pending_sku is not None:
+            # Waiting on a Qty for a SKU already seen on its own line (see
+            # _SKU_ONLY_ROW_RE above) -- must be the very next line, or
+            # this row is one of the mangled duplicate renderings and gets
+            # dropped rather than mis-paired.
+            qty_m = _QTY_ONLY_ROW_RE.match(line)
+            if qty_m and pending_name:
+                out.append(NoPriceLine(raw_product_text=pending_name, external_sku=pending_sku, quantity=int(qty_m.group("qty"))))
+            pending_name = None
+            pending_sku = None
+            continue
         sku_m = _CANCEL_SKU_ROW_RE.search(line)
         if sku_m:
             if pending_name:
                 out.append(NoPriceLine(raw_product_text=pending_name, external_sku=sku_m.group("sku"), quantity=int(sku_m.group("qty"))))
             pending_name = None
             continue
+        if pending_name is not None:
+            sku_only_m = _SKU_ONLY_ROW_RE.match(line)
+            if sku_only_m:
+                pending_sku = sku_only_m.group("sku")
+                continue
         name_m = _NAME_ROW_RE.match(line)
         if name_m:
             text = name_m.group(1).strip()

@@ -160,7 +160,10 @@ function Dashboard({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
 
   const isFirstRun = (summary?.order_count ?? 0) === 0
 
-  const unitsHeld = (summary?.in_hand ?? 0) + (summary?.listed ?? 0)
+  // "Held" here means "yours, one way or another" -- in hand, or still on
+  // the way. Matches crud.SHIPPABLE_ITEM_STATUSES on the backend, which is
+  // exactly what est_inventory_value below is already computed over.
+  const unitsHeld = (summary?.not_shipped ?? 0) + (summary?.in_transit ?? 0) + (summary?.in_hand ?? 0)
   const soldCount = summary?.sold_priced_count ?? 0
   const avgCostPerUnitHeld = unitsHeld > 0 ? (summary?.est_inventory_value ?? 0) / unitsHeld : 0
   const avgSalePrice = soldCount > 0 ? (summary?.sold_revenue ?? 0) / soldCount : 0
@@ -198,7 +201,7 @@ function Dashboard({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
           caption={
             isFirstRun
               ? 'nothing on hand yet'
-              : `${summary?.in_hand ?? 0} in hand · ${summary?.listed ?? 0} listed`
+              : `${summary?.in_hand ?? 0} in hand · ${summary?.in_transit ?? 0} in transit · ${summary?.not_shipped ?? 0} not shipped`
           }
           stats={
             isFirstRun

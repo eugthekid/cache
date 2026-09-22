@@ -40,6 +40,12 @@ _TRAILING_PRICE_RE = re.compile(
     r"\s*[-–—]\s*\$?[\d,]+\.?\d*\s*(?:USD|CAD|GBP|EUR)?\s*(?:\([^)]*\))?\s*$",
     re.IGNORECASE,
 )
+# "TCG" is unconditionally the same three words in this domain -- unlike
+# "Series 2" vs "Series 3", there is no real product where the expansion
+# could be wrong, so this is safe to fold in here rather than leave as a
+# visible-but-unmerged duplicate. Matched as a whole word so it never
+# touches a string that merely contains "tcg" as a substring.
+_TCG_RE = re.compile(r"\btcg\b", re.IGNORECASE)
 
 
 def normalize(raw: Optional[str]) -> str:
@@ -53,6 +59,14 @@ def normalize(raw: Optional[str]) -> str:
                              within the same spreadsheet
       - drop "2x " prefix  : HiddenAIO prefixes quantity onto the name
       - drop trailing price: HayhaAIO appends " - $35.98"
+      - expand "TCG"       : Discord/bot names abbreviate it, email
+                             confirmations spell out "Trading Card Game" --
+                             same three words always, never a different
+                             product, so this is folded in rather than left
+                             as a visible-but-unmerged duplicate (found
+                             live, 2026-09-18: "Pokémon TCG: Greninja ex
+                             Box" and "Pokémon Trading Card Game: Greninja
+                             ex Box" as two separate products)
       - punctuation to
         spaces             : em-dash vs hyphen vs colon vary by retailer
       - collapse whitespace
@@ -64,6 +78,7 @@ def normalize(raw: Optional[str]) -> str:
     text = text.lower()
     text = _QTY_PREFIX_RE.sub("", text)
     text = _TRAILING_PRICE_RE.sub("", text)
+    text = _TCG_RE.sub("trading card game", text)
     text = re.sub(r"[^a-z0-9]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 

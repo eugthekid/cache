@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from app.email_ingest.parse_target import parse_confirmation, parse_order_number, parse_purchased_at
+from app.email_ingest.parse_target import parse_confirmation, parse_order_number, parse_purchased_at, parse_ship_to_address
 
 BODY = """Order #912003448396552
 
@@ -123,6 +123,8 @@ if len(lines) == 1:
     check("unit_price (tax-inclusive)", line.unit_price, 65.315, tol=0.001)
     total_allocated = line.unit_price * line.quantity
     check("allocated total reconciles to Order total ($130.63)", round(total_allocated, 2), 130.63)
+
+check("ship_to_address", parse_ship_to_address(BODY), "Eugene Seo, 5306 217th Street, Oakland Gardens, NY 11364")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

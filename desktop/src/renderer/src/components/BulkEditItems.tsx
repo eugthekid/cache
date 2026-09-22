@@ -9,7 +9,7 @@ interface BulkEditItemsProps {
   onApply: (patch: InventoryItemUpdate) => Promise<void>
 }
 
-const ITEM_STATUSES: InventoryStatus[] = ['in_hand', 'listed', 'sold', 'returned', 'lost']
+const ITEM_STATUSES: InventoryStatus[] = ['not_shipped', 'in_transit', 'in_hand', 'sold', 'returned', 'lost']
 
 function FieldRow({ label, children }: { label: string; children: React.ReactNode }): React.JSX.Element {
   return (
@@ -41,8 +41,6 @@ function BulkEditItems({ count, onClose, onSaved, onApply }: BulkEditItemsProps)
   const [status, setStatus] = useState<InventoryStatus | ''>('')
   const [costBasis, setCostBasis] = useState('')
   const [location, setLocation] = useState('')
-  const [listedPrice, setListedPrice] = useState('')
-  const [listedPlatform, setListedPlatform] = useState('')
   const [soldPrice, setSoldPrice] = useState('')
   const [soldPlatform, setSoldPlatform] = useState('')
   const [soldAt, setSoldAt] = useState('')
@@ -50,7 +48,6 @@ function BulkEditItems({ count, onClose, onSaved, onApply }: BulkEditItemsProps)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const showListed = status === 'listed'
   const showSold = status === 'sold'
   const showLocation = status !== 'sold'
 
@@ -59,7 +56,6 @@ function BulkEditItems({ count, onClose, onSaved, onApply }: BulkEditItemsProps)
     costBasis.trim() !== '' ||
     notes.trim() !== '' ||
     (showLocation && location.trim() !== '') ||
-    (showListed && [listedPrice, listedPlatform].some((v) => v.trim() !== '')) ||
     (showSold && [soldPrice, soldPlatform, soldAt].some((v) => v.trim() !== ''))
 
   async function save(): Promise<void> {
@@ -72,10 +68,6 @@ function BulkEditItems({ count, onClose, onSaved, onApply }: BulkEditItemsProps)
       if (costBasis.trim() !== '') patch.cost_basis = Number(costBasis)
       if (showLocation && location.trim() !== '') patch.location = location
       if (notes.trim() !== '') patch.notes = notes
-      if (showListed) {
-        if (listedPrice.trim() !== '') patch.listed_price = Number(listedPrice)
-        if (listedPlatform.trim() !== '') patch.listed_platform = listedPlatform
-      }
       if (showSold) {
         if (soldPrice.trim() !== '') patch.sold_price = Number(soldPrice)
         if (soldPlatform.trim() !== '') patch.sold_platform = soldPlatform
@@ -131,17 +123,6 @@ function BulkEditItems({ count, onClose, onSaved, onApply }: BulkEditItemsProps)
             <FieldRow label="Location">
               <input className="field-input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Closet A, Storage bin 3…" />
             </FieldRow>
-          )}
-
-          {showListed && (
-            <>
-              <FieldRow label="Listed price">
-                <input className="field-input num" type="number" step="0.01" value={listedPrice} onChange={(e) => setListedPrice(e.target.value)} placeholder="0.00" />
-              </FieldRow>
-              <FieldRow label="Listed on">
-                <input className="field-input" value={listedPlatform} onChange={(e) => setListedPlatform(e.target.value)} placeholder="eBay" />
-              </FieldRow>
-            </>
           )}
 
           {showSold && (

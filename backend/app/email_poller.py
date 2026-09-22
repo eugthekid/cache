@@ -170,6 +170,21 @@ def _run_once(address: str, app_password: str) -> None:
       did -- there is no analogous "backend down" failure mode anymore
       when ingestion is a plain Python call in the same process.
 
+      EACH CLAIM COMMITS ON ITS OWN, right after crud.ingest_order()
+      succeeds -- not batched into the one commit at the end of the
+      cycle. Found while auditing this function (2026-09-18): with a
+      single commit for the whole cycle, db.rollback() on a LATER
+      claim's failure reverts the entire uncommitted SQLAlchemy session,
+      not just that claim's own work -- confirmed by direct reproduction.
+      The order row itself turned out to already be safe either way
+      (crud.materialize_order commits internally before ingest_order
+      returns), but ingest_order's LAST step, catalog.find_catalog_matches
+      plus the db.refresh() after it, commits nothing -- so an earlier
+      claim's catalog auto-match could still be silently reverted by a
+      later claim's failure in the same cycle. Committing right after
+      each claim closes that gap categorically, for this step and any
+      future one added to ingest_order that doesn't commit its own work.
+
       The IMAP CONNECTION itself (login, or anything before the
       candidate loop starts) failing is NOT caught here -- it propagates
       out of _run_once(), so the new high-water mark is never saved this
@@ -226,6 +241,7 @@ def _run_once(address: str, app_password: str) -> None:
                     try:
                         order_in = schemas.OrderCreate(**claim.to_payload(), source_id=source.id)
                         crud.ingest_order(db, order_in)
+                        db.commit()
                         posted += 1
                     except Exception as exc:
                         print(f"[email] claim rejected, external_id={claim.external_id}: {exc!r}", file=sys.stderr)

@@ -7,7 +7,7 @@ interface AddInventoryItemProps {
   onAdded: () => void
 }
 
-const ITEM_STATUSES: InventoryStatus[] = ['in_hand', 'listed', 'sold', 'returned', 'lost']
+const ITEM_STATUSES: InventoryStatus[] = ['not_shipped', 'in_transit', 'in_hand', 'sold', 'returned', 'lost']
 
 function AddInventoryItem({ onClose, onAdded }: AddInventoryItemProps): React.JSX.Element {
   const [productText, setProductText] = useState('')

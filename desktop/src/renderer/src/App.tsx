@@ -7,6 +7,7 @@ import Inventory from './screens/Inventory'
 import Settings from './screens/Settings'
 import NavRail, { type Screen } from './components/NavRail'
 import WavyBackground from './components/WavyBackground'
+import useShippingNotifications from './hooks/useShippingNotifications'
 
 type GateState = 'checking' | 'needs-activation' | 'unreachable' | 'ready'
 
@@ -18,6 +19,12 @@ function App(): React.JSX.Element {
   useEffect(() => {
     checkGate()
   }, [])
+
+  // Lives at the app root, not inside Orders.tsx, so a delivery
+  // notification fires no matter which screen is currently open -- see
+  // the hook's own docstring for why this is separate from the existing
+  // in-app banner.
+  useShippingNotifications(gate === 'ready')
 
   async function checkGate(): Promise<void> {
     setGate('checking')

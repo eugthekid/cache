@@ -81,6 +81,22 @@ _CANCEL_ORDER_NUMBER_RE = re.compile(r"[Oo]rder #\s*\n*\s*(?:https?://\S+\s*\n*\
 # _CANCEL_ORDER_NUMBER_RE above -- identical shape in both, 4 years apart.
 _CANCEL_QTY_RE = re.compile(r"Qty\s*:\s*(\d+)")
 
+# "Delivers to:\nEugene Seo, 5306 217th Street, Oakland Gardens, NY 11364"
+# -- verified live 2026-09-19 against 3 real confirmation emails, all
+# identical shape: the label on its own line, the full address (already
+# comma-joined by Target itself, unlike PC's multi-line render) on the
+# next.
+_SHIP_TO_RE = re.compile(r"Delivers to:\s*\n(.+)")
+
+# "Eugene, items from your order have arrived\n...\nDelivered June 1,
+# 2026" -- verified live against 4 real ARRIVED emails (orders spanning
+# May-July 2026), same "Month DD, YYYY" format parse_purchased_at already
+# expects. A SECOND "Delivered on Mon, Jun 1, 2026" appears later, right
+# next to the line item -- deliberately not matched by this regex (no
+# "on", abbreviated month), so .search() always lands on this first,
+# cleaner occurrence.
+_DELIVERED_RE = re.compile(r"Delivered\s+([A-Za-z]+ \d{1,2}, \d{4})")
+
 
 @dataclass
 class Line:
@@ -191,6 +207,22 @@ def parse_order_number(body: str) -> Optional[str]:
 
 def parse_purchased_at(body: str) -> Optional[str]:
     m = _PLACED_RE.search(body)
+    return m.group(1) if m else None
+
+
+def parse_ship_to_address(body: str) -> Optional[str]:
+    """The confirmation's "Delivers to:" line. None when the marker isn't
+    found -- never guessed."""
+    m = _SHIP_TO_RE.search(body)
+    if not m:
+        return None
+    return m.group(1).strip() or None
+
+
+def parse_delivered_at(body: str) -> Optional[str]:
+    """For an ARRIVED email: the raw 'Month DD, YYYY' string, same shape
+    parse_purchased_at returns -- caller parses it the same way."""
+    m = _DELIVERED_RE.search(body)
     return m.group(1) if m else None
 
 

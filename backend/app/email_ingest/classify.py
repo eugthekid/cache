@@ -109,6 +109,20 @@ _TARGET_ARRIVES_SOON = re.compile(r"your order arrives (today|tomorrow)! order "
 _TARGET_ARRIVED = re.compile(r"items have arrived from order " + _TARGET_NUM, re.I)
 _TARGET_CANCEL_FULL = re.compile(r"sorry, we had to cancel order " + _TARGET_NUM, re.I)
 _TARGET_CANCEL_PARTIAL = re.compile(r"canceled items? from your order ending in (\d{3,4})", re.I)
+# A THIRD real cancellation subject, found live 2026-09-21 cross-checking
+# against an independent Gmail read: "Sorry we had to cancel items in
+# order #912003760839485." -- no comma after "Sorry" (unlike
+# _TARGET_CANCEL_FULL), and "cancel items in order" rather than "cancel
+# order". Despite giving the FULL order number in the subject (like
+# CANCELLED_FULL), the BODY has the same "Canceled items" + product +
+# Qty section as the ending-in-NNNN partial template, not zero signal --
+# verified against the real email (Sylveon ex Box, Qty: 2, matching the
+# order's full original quantity). Classified as CANCELLED_PARTIAL so it
+# reuses that body parsing unchanged; ingest.py prefers this subject-
+# derived order number over the body-parsed one when both exist, since
+# the subject is more reliable here than the ending-in-NNNN template
+# where the subject gives none at all.
+_TARGET_CANCEL_ITEMS_FULLNUM = re.compile(r"sorry,? we had to cancel items? in order " + _TARGET_NUM, re.I)
 _TARGET_PREORDER = re.compile(r"process your preorder payment soon " + _TARGET_NUM, re.I)
 
 # --- Walmart -----------------------------------------------------------------
@@ -155,6 +169,8 @@ def classify(subject: str) -> Classification:
         return Classification(Retailer.TARGET, EmailKind.ARRIVED, m.group(1))
     if m := _TARGET_CANCEL_FULL.search(s):
         return Classification(Retailer.TARGET, EmailKind.CANCELLED_FULL, m.group(1))
+    if m := _TARGET_CANCEL_ITEMS_FULLNUM.search(s):
+        return Classification(Retailer.TARGET, EmailKind.CANCELLED_PARTIAL, m.group(1))
     if _TARGET_CANCEL_PARTIAL.search(s):
         # Order number not resolvable from the subject -- see module note.
         return Classification(Retailer.TARGET, EmailKind.CANCELLED_PARTIAL, None)
