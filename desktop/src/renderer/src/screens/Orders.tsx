@@ -373,6 +373,20 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
     })
   }
 
+  /** Checks every id, or unchecks them if they were all already checked --
+   * the grouped view's cart, line and header checkboxes all go through this. */
+  function toggleLines(ids: string[]): void {
+    setCheckedIds((prev) => {
+      const allChecked = ids.length > 0 && ids.every((id) => prev.has(id))
+      const next = new Set(prev)
+      for (const id of ids) {
+        if (allChecked) next.delete(id)
+        else next.add(id)
+      }
+      return next
+    })
+  }
+
   function toggleAllChecked(): void {
     setCheckedIds((prev) => (prev.size === orders.length ? new Set() : new Set(orders.map((o) => o.id))))
   }
@@ -707,7 +721,13 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
               />
             </>
           ) : view === 'grouped' ? (
-            <GroupedOrders groups={sortGroups(groupOrders(orders), sort)} selectedId={selectedId} onSelect={selectOrder} />
+            <GroupedOrders
+              groups={sortGroups(groupOrders(orders), sort)}
+              selectedId={selectedId}
+              onSelect={selectOrder}
+              checkedIds={checkedIds}
+              onToggleLines={toggleLines}
+            />
           ) : (
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>

@@ -94,9 +94,45 @@ interface GroupedOrdersProps {
   groups: OrderGroup[]
   selectedId: string | null
   onSelect: (order: Order) => void
+  /** Ids of every checked LINE. A cart's checkbox is derived from its
+   * lines, so selecting a cart is just selecting all of them -- which is
+   * what lets the bulk bar cancel or delete a whole purchase at once. */
+  checkedIds: Set<string>
+  /** Selects every id given, or clears them if they were all already
+   * selected -- one call serves a line, a cart, and the header checkbox. */
+  onToggleLines: (ids: string[]) => void
 }
 
-function GroupedOrders({ groups, selectedId, onSelect }: GroupedOrdersProps): React.JSX.Element {
+function GroupCheckbox({
+  ids,
+  checkedIds,
+  onToggleLines
+}: {
+  ids: string[]
+  checkedIds: Set<string>
+  onToggleLines: (ids: string[]) => void
+}): React.JSX.Element {
+  const checkedCount = ids.filter((id) => checkedIds.has(id)).length
+  return (
+    <input
+      type="checkbox"
+      checked={ids.length > 0 && checkedCount === ids.length}
+      ref={(el) => {
+        if (el) el.indeterminate = checkedCount > 0 && checkedCount < ids.length
+      }}
+      onChange={() => onToggleLines(ids)}
+    />
+  )
+}
+
+function GroupedOrders({
+  groups,
+  selectedId,
+  onSelect,
+  checkedIds,
+  onToggleLines
+}: GroupedOrdersProps): React.JSX.Element {
+  const allIds = groups.flatMap((g) => g.lines.map((l) => l.id))
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   function toggle(key: string): void {
@@ -112,6 +148,9 @@ function GroupedOrders({ groups, selectedId, onSelect }: GroupedOrdersProps): Re
     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
       <thead>
         <tr>
+          <th style={{ paddingTop: 16, width: 32 }}>
+            <GroupCheckbox ids={allIds} checkedIds={checkedIds} onToggleLines={onToggleLines} />
+          </th>
           <th style={{ paddingTop: 16, width: 26 }} />
           <th style={{ paddingTop: 16 }}>Product</th>
           <th style={{ paddingTop: 16 }}>Order #</th>
@@ -147,6 +186,9 @@ function GroupedOrders({ groups, selectedId, onSelect }: GroupedOrdersProps): Re
                     : undefined
               }}
             >
+              <td onClick={(e) => e.stopPropagation()}>
+                <GroupCheckbox ids={group.lines.map((l) => l.id)} checkedIds={checkedIds} onToggleLines={onToggleLines} />
+              </td>
               <td style={{ color: 'var(--text-faint)', fontSize: 11 }}>{isMulti ? (isOpen ? '▾' : '▸') : ''}</td>
               <td>
                 <span style={{ fontSize: 12.5, fontWeight: isMulti ? 600 : 400 }}>
@@ -188,6 +230,9 @@ function GroupedOrders({ groups, selectedId, onSelect }: GroupedOrdersProps): Re
                         : 'oklch(15% 0.012 255 / 0.35)'
                   }}
                 >
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <GroupCheckbox ids={[line.id]} checkedIds={checkedIds} onToggleLines={onToggleLines} />
+                  </td>
                   <td />
                   <td style={{ paddingLeft: 26, color: 'var(--text-secondary)', fontSize: 12 }}>
                     {line.product_name ?? line.raw_product_text ?? 'Unknown item'}
