@@ -95,6 +95,23 @@ _CANCEL_SKU_ROW_RE = re.compile(r"SKU\s*\#\s*:\s*(?P<sku>[\w-]+).*?Qty\s*:\s*(?P
 # guess" discipline as parse_confirmation's subtotal cross-check above --
 # a dropped duplicate is fine; a wrong pairing from a mangled row is not.
 _SKU_ONLY_ROW_RE = re.compile(r"^\s*\|?\s*SKU\s*\#\s*:\s*(?P<sku>[\w-]+)\s*$")
+
+# A THIRD shape for the same row, found live 2026-10-01 against every one of
+# a SHIPPED email's lines (verified across 4 real orders, including
+# P0038927021 -- the order this module's docstring long credited as proof
+# the two-line shape above was sufficient; it never was, that email is this
+# shape too): the label and its value don't even share a line. "SKU #" sits
+# alone, ": 10-10451-115" is the next line, then "Qty" alone, then ": 3" --
+# four lines for one field pair instead of one or two. Same fail-closed
+# reasoning as the pair above: PC renders this row 2-3 more times at
+# shallower nesting, and the repeats come out mangled (a value line fused to
+# the next copy's "SKU #" across a "|", e.g. ": 3 | SKU #") -- anchoring the
+# label line to have NOTHING after "SKU #"/"Qty" and the value line to have
+# nothing after its value makes every mangled repeat fail to match, so only
+# the first clean copy is ever captured.
+_SKU_LABEL_SPLIT_RE = re.compile(r"^\s*\|?\s*SKU\s*\#\s*$")
+_QTY_LABEL_SPLIT_RE = re.compile(r"^\s*Qty\s*$")
+_VALUE_ONLY_RE = re.compile(r"^\s*:\s*(?P<val>[^|]+?)\s*\|?\s*$")
 _QTY_ONLY_ROW_RE = re.compile(r"^\s*Qty\s*:\s*(?P<qty>\d+)\s*\|?\s*$")
 
 
@@ -276,7 +293,38 @@ def _extract_no_price_lines(body: str) -> list[NoPriceLine]:
     out: list[NoPriceLine] = []
     pending_name: Optional[str] = None
     pending_sku: Optional[str] = None
+    # State for the 4-line "SKU #" / ": value" / "Qty" / ": value" shape --
+    # see _SKU_LABEL_SPLIT_RE above. One of None, "await_sku_value",
+    # "await_qty_label", "await_qty_value".
+    split_state: Optional[str] = None
+    split_sku: Optional[str] = None
     for line in window.splitlines():
+        if split_state is not None:
+            if split_state == "await_sku_value":
+                value_m = _VALUE_ONLY_RE.match(line)
+                if value_m:
+                    split_sku = value_m.group("val").strip()
+                    split_state = "await_qty_label"
+                else:
+                    split_state = None
+                    split_sku = None
+                continue
+            if split_state == "await_qty_label":
+                if _QTY_LABEL_SPLIT_RE.match(line):
+                    split_state = "await_qty_value"
+                else:
+                    split_state = None
+                    split_sku = None
+                continue
+            # await_qty_value
+            value_m = _VALUE_ONLY_RE.match(line)
+            qty_text = value_m.group("val").strip() if value_m else ""
+            if value_m and qty_text.isdigit() and pending_name and split_sku:
+                out.append(NoPriceLine(raw_product_text=pending_name, external_sku=split_sku, quantity=int(qty_text)))
+            pending_name = None
+            split_state = None
+            split_sku = None
+            continue
         if pending_sku is not None:
             # Waiting on a Qty for a SKU already seen on its own line (see
             # _SKU_ONLY_ROW_RE above) -- must be the very next line, or
@@ -298,6 +346,9 @@ def _extract_no_price_lines(body: str) -> list[NoPriceLine]:
             sku_only_m = _SKU_ONLY_ROW_RE.match(line)
             if sku_only_m:
                 pending_sku = sku_only_m.group("sku")
+                continue
+            if _SKU_LABEL_SPLIT_RE.match(line):
+                split_state = "await_sku_value"
                 continue
         name_m = _NAME_ROW_RE.match(line)
         if name_m:
