@@ -31,7 +31,7 @@ from typing import Any, Optional
 
 import httpx
 
-from app.tracking import TrackingUpdate
+from app.tracking import QuotaExceeded, TrackingUpdate
 
 _BASE_URL = "https://api.17track.net/track/v2.4"
 
@@ -56,6 +56,11 @@ _STATUS_MAP: dict[str, Optional[str]] = {
 # sync_tracking_fields() already edge-triggers on -- see TrackingUpdate.alert.
 _ALERT_STATUSES = {"OutForDelivery", "AvailableForPickup", "DeliveryFailure", "Exception"}
 
+# /register rejections that mean "no quota left", not "bad number" -- from
+# 17TRACK's own error table: -18019908 "Your quotas have ran out." and
+# -18019907 "Tracking amount exceeds your daily limit".
+_QUOTA_ERROR_CODES = {-18019908, -18019907}
+
 _STATUS_DETAIL: dict[str, str] = {
     "InfoReceived": "Label created",
     "InTransit": "In transit",
@@ -71,6 +76,11 @@ _STATUS_DETAIL: dict[str, str] = {
 class SeventeenTrackProvider:
     def __init__(self, api_key: str, client: Optional[httpx.Client] = None) -> None:
         self._api_key = api_key
+        # Set the first time /register reports no quota left. Every later
+        # unseen number this cycle then skips straight to QuotaExceeded
+        # without another HTTP call. The poller builds a fresh provider
+        # each cycle, so this retries once per cycle, not forever.
+        self._quota_exhausted = False
         # Injectable for tests -- see tests/test_seventeen_track.py, which
         # passes a fake client that never touches the network.
         self._client = client or httpx.Client(
@@ -86,6 +96,8 @@ class SeventeenTrackProvider:
             # registration failure (bad number, carrier truly
             # undetectable) is a real "nothing to report" case, not an
             # error the poller should crash a whole cycle over.
+            if self._quota_exhausted:
+                raise QuotaExceeded()
             if not self._register(tracking_number):
                 return TrackingUpdate()
             info = self._get_track_info(tracking_number)
@@ -128,5 +140,12 @@ class SeventeenTrackProvider:
         response = self._client.post("/register", json=[{"number": tracking_number}])
         response.raise_for_status()
         body = response.json()
-        accepted = ((body.get("data") or {}).get("accepted")) or []
-        return any(row.get("number") == tracking_number for row in accepted)
+        data = body.get("data") or {}
+        accepted = data.get("accepted") or []
+        if any(row.get("number") == tracking_number for row in accepted):
+            return True
+        for row in data.get("rejected") or []:
+            if row.get("number") == tracking_number and (row.get("error") or {}).get("code") in _QUOTA_ERROR_CODES:
+                self._quota_exhausted = True
+                raise QuotaExceeded()
+        return False

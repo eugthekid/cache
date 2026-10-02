@@ -109,6 +109,14 @@ def tracking_url(tracking_number: Optional[str], carrier: Optional[str] = None) 
     return template.format(number=number) if template else None
 
 
+class QuotaExceeded(Exception):
+    """A provider refused to start tracking a NEW number because the
+    account's registration quota is used up. Not a failure of that order:
+    numbers the provider already knows keep updating for free, and the
+    refused ones simply wait for the quota to reset. Raised from fetch()
+    so the poller can count these as deferred instead of failed."""
+
+
 class TrackingProvider(Protocol):
     """
     What a live carrier integration has to implement.

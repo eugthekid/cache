@@ -134,8 +134,19 @@ def _run_once(api_key: str, stop_event: threading.Event) -> None:
         )
         if not orders:
             return
+        # Confirmed in-transit shipments first, then label-created ones;
+        # oldest purchase first within each. Only matters while the
+        # provider's registration quota is short (numbers it already knows
+        # cost nothing to re-check): the shipments most likely to land
+        # soon get tracked before the ones that just left the warehouse.
+        orders.sort(
+            key=lambda o: (
+                0 if o.shipping_status == "in_transit" else 1,
+                o.purchased_at.isoformat() if o.purchased_at else "9999",
+            )
+        )
 
-        checked = failed = 0
+        checked = failed = deferred = 0
         for order in orders:
             if stop_event.is_set():
                 break
@@ -143,13 +154,19 @@ def _run_once(api_key: str, stop_event: threading.Event) -> None:
                 _apply_update(db, provider, order)
                 db.commit()
                 checked += 1
+            except tracking.QuotaExceeded:
+                db.rollback()
+                deferred += 1
             except Exception as exc:
                 print(f"[tracking] update failed for order {order.id}: {exc!r}", file=sys.stderr)
                 db.rollback()
                 failed += 1
             time.sleep(_BETWEEN_ORDERS_SECONDS)
 
-        print(f"[tracking] checked {checked} shipment(s), {failed} failed.")
+        message = f"[tracking] checked {checked} shipment(s), {failed} failed."
+        if deferred:
+            message += f" {deferred} waiting on the provider's registration quota to reset."
+        print(message)
     finally:
         db.close()
 

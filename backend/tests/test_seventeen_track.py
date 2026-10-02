@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.tracking import QuotaExceeded
 from app.tracking_providers.seventeen_track import SeventeenTrackProvider
 
 passed = failed = 0
@@ -148,6 +149,56 @@ c6.post.side_effect = [fake_response(body)]
 p6 = SeventeenTrackProvider("fake-key", client=c6)
 u6 = p6.fetch("1Z3")
 check("estimated_delivery range -> takes the later 'to' edge", u6.estimated_delivery, "2026-09-22")
+
+
+# --- test 7: quota exhausted -- raises QuotaExceeded, and later unseen
+# numbers in the same cycle skip the network entirely ---
+def quota_rejection(number, code=-18019908, message="Your quotas have ran out."):
+    return fake_response({
+        "code": 0,
+        "data": {"accepted": [], "rejected": [{"number": number, "error": {"code": code, "message": message}}]},
+    })
+
+
+c7 = MagicMock()
+c7.post.side_effect = [empty_response(), quota_rejection("N1")]
+p7 = SeventeenTrackProvider("fake-key", client=c7)
+raised = False
+try:
+    p7.fetch("N1")
+except QuotaExceeded:
+    raised = True
+check("quota rejection: raises QuotaExceeded (not a silent empty update)", raised, True)
+
+c7.post.side_effect = [empty_response()]  # only the free lookup is allowed
+calls_before = c7.post.call_count
+raised_again = False
+try:
+    p7.fetch("N2")
+except QuotaExceeded:
+    raised_again = True
+check("after quota hit: next unseen number raises without trying to register", raised_again, True)
+check("after quota hit: only the free lookup was made (1 call, no register)", c7.post.call_count - calls_before, 1)
+
+c7b = MagicMock()
+c7b.post.side_effect = [empty_response(), quota_rejection("N3", code=-18019907, message="Tracking amount exceeds your daily limit")]
+raised_daily = False
+try:
+    SeventeenTrackProvider("fake-key", client=c7b).fetch("N3")
+except QuotaExceeded:
+    raised_daily = True
+check("daily-limit rejection also counts as quota", raised_daily, True)
+
+# an ALREADY-registered number still updates after the quota is gone
+c7.post.side_effect = [track_info_response("KNOWN1", "InTransit")]
+known = p7.fetch("KNOWN1")
+check("after quota hit: an already-registered number still updates", known.shipping_status, "in_transit")
+
+# a rejection for any other reason is still just 'nothing to report'
+c7c = MagicMock()
+c7c.post.side_effect = [empty_response(), quota_rejection("BAD1", code=-18010002, message="invalid number")]
+other = SeventeenTrackProvider("fake-key", client=c7c).fetch("BAD1")
+check("non-quota rejection: still an empty update, no exception", other.shipping_status, None)
 
 
 print(f"\n{passed} passed, {failed} failed")

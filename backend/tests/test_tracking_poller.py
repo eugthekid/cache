@@ -115,5 +115,48 @@ check("detail changes to Delivered: shipping_status updates", order3.shipping_st
 check("detail changes to Delivered: alert fires again (sync_tracking_fields' own trigger)", order3.shipping_alert_at != first_alert_at, True)
 
 
+# --- test 4: _run_once -- in-transit first, oldest first, and quota
+# deferrals are counted, not treated as failures ---
+from datetime import datetime
+from app.tracking import QuotaExceeded
+
+db4, user4 = make_db()
+make_order(db4, user4, order_number="new-transit", tracking_number="N-NEW", shipping_status="in_transit", purchased_at=datetime(2026, 9, 30))
+make_order(db4, user4, order_number="label", tracking_number="N-LABEL", shipping_status="label_created", purchased_at=datetime(2026, 8, 1))
+make_order(db4, user4, order_number="old-transit", tracking_number="N-OLD", shipping_status="in_transit", purchased_at=datetime(2026, 9, 1))
+make_order(db4, user4, order_number="delivered", tracking_number="N-DONE", shipping_status="delivered", purchased_at=datetime(2026, 7, 1))
+
+
+class QuotaProvider:
+    """Knows the oldest in-transit number already; refuses to register anything else."""
+
+    def __init__(self):
+        self.seen = []
+
+    def fetch(self, tracking_number, carrier=None):
+        self.seen.append(tracking_number)
+        if tracking_number == "N-OLD":
+            return TrackingUpdate(shipping_status="in_transit", detail="In transit")
+        raise QuotaExceeded()
+
+
+qp = QuotaProvider()
+tracking_poller.SessionLocal = lambda: db4
+tracking_poller.tracking.resolve_provider = lambda key: qp
+tracking_poller._BETWEEN_ORDERS_SECONDS = 0
+import threading
+tracking_poller._run_once("fake-key", threading.Event())
+
+check("poll order: in-transit oldest-first, then in-transit newer, then label-created; delivered never polled",
+      qp.seen, ["N-OLD", "N-NEW", "N-LABEL"])
+check("quota-deferred orders keep their status (untouched, not failed)",
+      sorted(o.shipping_status for o in db4.query(models.Order).filter(models.Order.order_number.in_(["new-transit", "label"]))),
+      ["in_transit", "label_created"])
+check("the order the provider already knew WAS checked",
+      db4.query(models.Order).filter_by(order_number="old-transit").one().tracking_checked_at is not None, True)
+check("deferred orders were not marked checked",
+      db4.query(models.Order).filter_by(order_number="new-transit").one().tracking_checked_at, None)
+
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
