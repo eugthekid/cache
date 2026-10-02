@@ -218,7 +218,16 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
   )
   const [statusFilter, setStatusFilter] = useState<Set<OrderStatus>>(new Set())
   const [sort, setSort] = useState<OrderSort>('date_desc')
+  // `searchInput` is what's typed (updates instantly); `search` is what the
+  // server is asked for, trailing it by a moment so a fast typist makes one
+  // request, not one per keystroke.
+  const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
+  // The full-screen skeleton is only for the very first load. Showing it on
+  // every refetch unmounted the whole screen -- search box included -- after
+  // each keystroke, which dropped focus and made typing one character at a
+  // time the best anyone could do.
+  const [hasLoaded, setHasLoaded] = useState(false)
   // Guards against out-of-order responses: changing two filters quickly
   // fires two requests, and without this the SLOWER (older) one can land
   // last and repaint the table with results the user already moved past.
@@ -286,6 +295,11 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
   // Filtering and sorting run server-side so they apply to ALL orders, not
   // just whichever page the client happens to be holding.
   useEffect(() => {
+    const timer = window.setTimeout(() => setSearch(searchInput), 250)
+    return () => window.clearTimeout(timer)
+  }, [searchInput])
+
+  useEffect(() => {
     load()
   }, [statusFilter, sort, search])
 
@@ -320,7 +334,10 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
       if (seq !== requestSeq.current) return
       setError(err instanceof Error ? err.message : 'Failed to load orders')
     } finally {
-      if (seq === requestSeq.current) setLoading(false)
+      if (seq === requestSeq.current) {
+        setLoading(false)
+        setHasLoaded(true)
+      }
     }
   }
 
@@ -463,10 +480,18 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
     setCheckedIds(new Set())
   }
 
+  const filtering = search.trim() !== '' || statusFilter.size > 0
+
+  function clearFilters(): void {
+    setSearchInput('')
+    setSearch('')
+    setStatusFilter(new Set())
+  }
+
   const showFailureReason = draft.status === 'failed' || draft.status === 'cancelled'
   const showShipping = draft.status === 'success' || draft.status === 'pending'
 
-  if (loading) {
+  if (loading && !hasLoaded) {
     return (
       <>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -593,8 +618,8 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
 
             <input
               className="field-input"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Search product, order number, retailer…"
               style={{ flex: 1, minWidth: 170, height: 30, padding: '0 12px', fontSize: 12 }}
             />
@@ -654,9 +679,18 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
                   </svg>
                 }
                 iconBg="oklch(90% 0.02 250 / 0.07)"
-                title="No orders yet"
-                body="Once your Discord bot is connected, checkouts land here automatically — successes and failures both."
+                title={filtering ? 'No matching orders' : 'No orders yet'}
+                body={
+                  filtering
+                    ? 'Nothing matches this search and filter combination.'
+                    : 'Once your Discord bot is connected, checkouts land here automatically — successes and failures both.'
+                }
                 actions={
+                  filtering ? (
+                    <button className="btn-ghost" style={{ padding: '9px 17px', fontSize: 12.5 }} onClick={clearFilters}>
+                      Clear search and filters
+                    </button>
+                  ) : (
                   <>
                     <button className="btn-primary" style={{ padding: '9px 17px', fontSize: 12.5 }} onClick={() => onNavigate?.('settings')}>
                       Connect Discord
@@ -668,6 +702,7 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
                       Add manually
                     </button>
                   </>
+                  )
                 }
               />
             </>
