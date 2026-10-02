@@ -103,19 +103,20 @@ def bulk_delete_orders(body: schemas.BulkIds, db: Session = Depends(get_db)):
 @router.post("/bulk-status", response_model=schemas.BulkResult)
 def bulk_update_order_status(body: schemas.BulkOrderStatusUpdate, db: Session = Depends(get_db)):
     """
-    Row-by-row, not a bulk UPDATE: a bulk cancel of orders that already
-    had units materialized needs the same inventory reconciliation a
-    single-order edit gets (see crud.reconcile_order_inventory), and a
-    bare SQL UPDATE has no hook for that -- confirmed live as exactly how
-    the last batch of phantom units got created.
+    Row-by-row, not a bulk UPDATE, and through crud.update_order -- the
+    same path a single-order edit takes. That matters twice over: a bulk
+    cancel of orders that already had units materialized needs the same
+    inventory reconciliation (see crud.reconcile_order_inventory), and the
+    status must be recorded as a user override so the next email or
+    Discord message about the order can't quietly flip it back. Setting
+    the column directly skipped the override, which left a bulk cancel
+    revertible by the very next claim.
     """
     if not body.ids:
         return schemas.BulkResult(updated=0)
     orders = crud.live_orders(db).filter(models.Order.id.in_(body.ids)).all()
     for order in orders:
-        order.status = body.status
-        crud.reconcile_order_inventory(db, order)
-    db.commit()
+        crud.update_order(db, order, schemas.OrderUpdate(status=body.status))
     return schemas.BulkResult(updated=len(orders))
 
 
