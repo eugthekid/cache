@@ -13,7 +13,10 @@ interface ProductDetailProps {
    * that same list filtered down to one product. A checkbox checked in
    * either place is the same underlying selection. */
   checkedIds: Set<string>
-  onToggle: (id: string) => void
+  /** `shiftKey` extends the selection from the last-clicked unit through
+   * this one; `orderedIds` is this table's display order, which that range
+   * is measured in. */
+  onToggle: (id: string, shiftKey: boolean, orderedIds: string[]) => void
   onToggleAll: () => void
 }
 
@@ -25,8 +28,7 @@ function money(n: number | null | undefined): string {
 /**
  * Per-unit detail for one product -- replaces the old inline "unit 1, 2, 3"
  * list. That list had nothing to actually distinguish one unit from
- * another; the things that DO -- which order it came from, where it
- * physically is, whether it sold and for how much -- are exactly the
+ * another; the things that DO -- which order it came from, whether it sold and for how much -- are exactly the
  * columns here. A full screen rather than an inline expansion because a
  * single product can hold 90+ units (verified in real data), which reads
  * as a wall of rows inline but is a normal table on its own screen.
@@ -42,6 +44,7 @@ function ProductDetail({
   onToggle,
   onToggleAll
 }: ProductDetailProps): React.JSX.Element {
+  const orderedIds = units.map((u) => u.id)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 4px 14px' }}>
@@ -75,7 +78,6 @@ function ProductDetail({
               </th>
               <th style={{ paddingTop: 10 }}>Order #</th>
               <th style={{ paddingTop: 10 }}>Retailer</th>
-              <th style={{ paddingTop: 10 }}>Location</th>
               <th style={{ paddingTop: 10 }}>Status</th>
               <th style={{ paddingTop: 10 }}>Purchase price</th>
               <th style={{ paddingTop: 10 }}>Sale price</th>
@@ -89,7 +91,10 @@ function ProductDetail({
                 <tr
                   key={unit.id}
                   className="row"
-                  onClick={() => onSelectUnit(unit)}
+                  onMouseDown={(e) => {
+                    if (e.shiftKey) e.preventDefault()
+                  }}
+                  onClick={(e) => (e.shiftKey ? onToggle(unit.id, true, orderedIds) : onSelectUnit(unit))}
                   style={{
                     cursor: 'pointer',
                     background:
@@ -99,11 +104,15 @@ function ProductDetail({
                   }}
                 >
                   <td onClick={(e) => e.stopPropagation()}>
-                    <input type="checkbox" checked={checkedIds.has(unit.id)} onChange={() => onToggle(unit.id)} />
+                    <input
+                      type="checkbox"
+                      checked={checkedIds.has(unit.id)}
+                      onChange={() => undefined}
+                      onClick={(e) => onToggle(unit.id, e.shiftKey, orderedIds)}
+                    />
                   </td>
                   <td className="num" style={{ fontSize: 12.5 }}>{order?.order_number ?? (unit.order_id ? 'N/A' : 'imported')}</td>
                   <td style={{ color: 'var(--text-secondary)', fontSize: 12.5 }}>{order?.retailer ?? '—'}</td>
-                  <td style={{ color: 'var(--text-secondary)', fontSize: 12.5 }}>{unit.location ?? '—'}</td>
                   <td>
                     <StatusPill status={unit.status} />
                   </td>

@@ -38,7 +38,6 @@ def create_inventory_items(body: schemas.InventoryItemCreate, db: Session = Depe
             status=body.status,
             product_text=body.product_text,
             cost_basis=body.cost_basis,
-            location=body.location,
             notes=body.notes,
         )
         for _ in range(body.quantity)
@@ -136,7 +135,7 @@ def bulk_update_inventory_status(
 @router.post("/bulk-edit", response_model=schemas.BulkResult)
 def bulk_edit_items(body: schemas.InventoryBulkUpdate, db: Session = Depends(get_db)):
     """
-    Mass-adjust price/location/platform/etc. across a selection. Loops
+    Mass-adjust price/platform/etc. across a selection. Loops
     and reuses crud.update_inventory_item per item -- NOT a single bulk
     SQL UPDATE -- because that function carries a real business rule
     (marking 'sold' without a date fills in today) that a bare column
@@ -155,7 +154,7 @@ def bulk_edit_items(body: schemas.InventoryBulkUpdate, db: Session = Depends(get
 @router.post("/bulk-duplicate", response_model=list[schemas.InventoryItemOut])
 def bulk_duplicate_items(body: schemas.BulkIds, db: Session = Depends(get_db)):
     """
-    "I have another one of these" -- clones cost basis, location and notes
+    "I have another one of these" -- clones cost basis and notes
     from each source unit, but deliberately NOT its status or sale fields:
     a duplicate is fresh stock, not a copy of a completed sale, so it
     always starts 'in_hand' with sold_price/listed_price left null even
@@ -190,7 +189,6 @@ def bulk_duplicate_items(body: schemas.BulkIds, db: Session = Depends(get_db)):
             product_text=item.product_text,
             status="in_hand",
             cost_basis=item.cost_basis,
-            location=item.location,
             notes=item.notes,
         )
         for item in rows

@@ -27,20 +27,17 @@ function FieldRow({ label, children }: { label: string; children: React.ReactNod
  * single-unit edit panel, and it mirrors that panel's shape: Status sits
  * at the top and decides which other fields are even shown, because
  * listing/sale details only mean something at the matching stage.
- * Location is hidden for sold units -- where a unit physically is stops
- * being the seller's concern once it ships.
  *
  * No per-field opt-in: whatever you fill in gets applied, whatever you
  * leave blank is untouched on every selected unit. (The tradeoff is you
  * can't bulk-CLEAR a field back to empty -- rare enough to do per-item.)
  *
  * "Retailer" isn't a field here on purpose: it's an Order property, not a
- * per-unit one. Location is the closest per-unit analog.
+ * per-unit one.
  */
 function BulkEditItems({ count, onClose, onSaved, onApply }: BulkEditItemsProps): React.JSX.Element {
   const [status, setStatus] = useState<InventoryStatus | ''>('')
   const [costBasis, setCostBasis] = useState('')
-  const [location, setLocation] = useState('')
   const [soldPrice, setSoldPrice] = useState('')
   const [soldPlatform, setSoldPlatform] = useState('')
   const [soldAt, setSoldAt] = useState('')
@@ -49,13 +46,11 @@ function BulkEditItems({ count, onClose, onSaved, onApply }: BulkEditItemsProps)
   const [error, setError] = useState<string | null>(null)
 
   const showSold = status === 'sold'
-  const showLocation = status !== 'sold'
 
   const anyChange =
     status !== '' ||
     costBasis.trim() !== '' ||
     notes.trim() !== '' ||
-    (showLocation && location.trim() !== '') ||
     (showSold && [soldPrice, soldPlatform, soldAt].some((v) => v.trim() !== ''))
 
   async function save(): Promise<void> {
@@ -66,7 +61,6 @@ function BulkEditItems({ count, onClose, onSaved, onApply }: BulkEditItemsProps)
       const patch: InventoryItemUpdate = {}
       if (status !== '') patch.status = status
       if (costBasis.trim() !== '') patch.cost_basis = Number(costBasis)
-      if (showLocation && location.trim() !== '') patch.location = location
       if (notes.trim() !== '') patch.notes = notes
       if (showSold) {
         if (soldPrice.trim() !== '') patch.sold_price = Number(soldPrice)
@@ -118,12 +112,6 @@ function BulkEditItems({ count, onClose, onSaved, onApply }: BulkEditItemsProps)
           <FieldRow label="Price">
             <input className="field-input num" type="number" step="0.01" value={costBasis} onChange={(e) => setCostBasis(e.target.value)} placeholder="0.00" />
           </FieldRow>
-
-          {showLocation && (
-            <FieldRow label="Location">
-              <input className="field-input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Closet A, Storage bin 3…" />
-            </FieldRow>
-          )}
 
           {showSold && (
             <>

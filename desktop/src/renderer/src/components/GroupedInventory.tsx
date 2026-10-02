@@ -7,16 +7,26 @@ interface GroupedInventoryProps {
    * ProductDetail.tsx. Units aren't shown inline here any more: a product
    * can hold 90+ units, and listing them all in this table was both
    * unreadable and (per user feedback) not the right shape for what a
-   * unit actually needs to show (order #, location, sale price...). */
+   * unit actually needs to show (order #, status, sale price...). */
   onOpenProduct: (group: ProductGroup) => void
   onChanged: () => void
   /** Mass-select for bulk delete/edit/duplicate -- keyed by the same
    * groupKey() scheme Inventory.tsx uses everywhere else a product needs
    * an identity beyond its (possibly absent) product_id. */
   checkedKeys: Set<string>
-  onToggle: (group: ProductGroup) => void
+  /** `shiftKey` extends the selection from the last-clicked product
+   * through this one, in the order the rows are displayed. */
+  onToggle: (group: ProductGroup, shiftKey: boolean) => void
   onToggleAll: () => void
 }
+
+/** The five count columns (Units through Sold) share one width and centre
+ * their contents, so they read as an evenly spaced block instead of each
+ * column sizing itself to its own header text. */
+const COUNT_COLUMNS = 5
+const COUNT_WIDTH = '7.5%'
+const PRICE_WIDTH = '9%'
+const countCell = { textAlign: 'center' } as const
 
 function money(n: number): string {
   return `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -48,7 +58,18 @@ function GroupedInventory({
   }
 
   return (
-    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+    <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+      <colgroup>
+        <col style={{ width: 32 }} />
+        <col style={{ width: 40 }} />
+        <col />
+        {Array.from({ length: COUNT_COLUMNS }, (_, i) => (
+          <col key={i} style={{ width: COUNT_WIDTH }} />
+        ))}
+        <col style={{ width: PRICE_WIDTH }} />
+        <col style={{ width: PRICE_WIDTH }} />
+        <col style={{ width: PRICE_WIDTH }} />
+      </colgroup>
       <thead>
         <tr>
           <th style={{ paddingTop: 16, width: 32 }}>
@@ -56,11 +77,11 @@ function GroupedInventory({
           </th>
           <th style={{ paddingTop: 16, width: 40 }} />
           <th style={{ paddingTop: 16 }}>Product</th>
-          <th style={{ paddingTop: 16 }}>Units</th>
-          <th style={{ paddingTop: 16 }}>Not yet shipped</th>
-          <th style={{ paddingTop: 16 }}>In transit</th>
-          <th style={{ paddingTop: 16 }}>In hand</th>
-          <th style={{ paddingTop: 16 }}>Sold</th>
+          <th style={{ paddingTop: 16, ...countCell }}>Units</th>
+          <th style={{ paddingTop: 16, ...countCell }}>Not yet shipped</th>
+          <th style={{ paddingTop: 16, ...countCell }}>In transit</th>
+          <th style={{ paddingTop: 16, ...countCell }}>In hand</th>
+          <th style={{ paddingTop: 16, ...countCell }}>Sold</th>
           <th style={{ paddingTop: 16 }}>Avg. purchase price</th>
           <th style={{ paddingTop: 16 }}>Avg. sale price</th>
           <th style={{ paddingTop: 16 }}>Profit</th>
@@ -78,14 +99,22 @@ function GroupedInventory({
             <tr
               key={key}
               className="row"
-              onClick={() => onOpenProduct(group)}
+              onMouseDown={(e) => {
+                if (e.shiftKey) e.preventDefault()
+              }}
+              onClick={(e) => (e.shiftKey ? onToggle(group, true) : onOpenProduct(group))}
               style={{
                 cursor: 'pointer',
                 background: unmatched ? 'var(--status-warn-bg)' : undefined
               }}
             >
               <td onClick={(e) => e.stopPropagation()}>
-                <input type="checkbox" checked={checkedKeys.has(key)} onChange={() => onToggle(group)} />
+                <input
+                  type="checkbox"
+                  checked={checkedKeys.has(key)}
+                  onChange={() => undefined}
+                  onClick={(e) => onToggle(group, e.shiftKey)}
+                />
               </td>
               <td>
                 {group.image_url ? (
@@ -144,11 +173,11 @@ function GroupedInventory({
                   </span>
                 )}
               </td>
-              <td className="num" style={{ fontWeight: 600 }}>{group.total_units}</td>
-              <td className="num" style={{ color: 'var(--text-secondary)' }}>{group.not_shipped}</td>
-              <td className="num" style={{ color: 'var(--text-secondary)' }}>{group.in_transit}</td>
-              <td className="num" style={{ color: 'var(--status-success)' }}>{group.in_hand}</td>
-              <td className="num" style={{ color: 'var(--text-secondary)' }}>{group.sold}</td>
+              <td className="num" style={{ fontWeight: 600, ...countCell }}>{group.total_units}</td>
+              <td className="num" style={{ color: 'var(--text-secondary)', ...countCell }}>{group.not_shipped}</td>
+              <td className="num" style={{ color: 'var(--text-secondary)', ...countCell }}>{group.in_transit}</td>
+              <td className="num" style={{ color: 'var(--status-success)', ...countCell }}>{group.in_hand}</td>
+              <td className="num" style={{ color: 'var(--text-secondary)', ...countCell }}>{group.sold}</td>
               <td className="num" style={{ color: 'var(--text-secondary)' }}>
                 {group.avg_cost_basis != null ? money(group.avg_cost_basis) : '—'}
               </td>

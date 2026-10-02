@@ -158,7 +158,6 @@ class InventoryItemCreate(BaseModel):
     quantity: int = 1
     status: str = "in_hand"  # 'not_shipped' | 'in_transit' | 'in_hand' | 'sold' | 'returned' | 'lost'
     cost_basis: Optional[float] = None
-    location: Optional[str] = None
     notes: Optional[str] = None
 
 
@@ -176,7 +175,6 @@ class InventoryItemUpdate(BaseModel):
     status: Optional[str] = None  # 'not_shipped' | 'in_transit' | 'in_hand' | 'sold' | 'returned' | 'lost'
     product_text: Optional[str] = None
     cost_basis: Optional[float] = None
-    location: Optional[str] = None
     listed_price: Optional[float] = None
     listed_platform: Optional[str] = None
     sold_price: Optional[float] = None
@@ -188,7 +186,7 @@ class InventoryItemUpdate(BaseModel):
 class InventoryBulkUpdate(InventoryItemUpdate):
     """
     Same partial-update shape as InventoryItemUpdate, applied to a whole
-    selection at once -- "adjust price/location/platform/etc. across
+    selection at once -- "adjust price/platform/etc. across
     these N units" rather than "change one thing on all of them." Only
     the fields actually set get changed, same as the single-item PATCH
     (see crud.update_inventory_item's exclude_unset handling); a field
@@ -208,7 +206,6 @@ class InventoryItemOut(BaseModel):
     product_text: Optional[str]
     product_id: Optional[str]
     cost_basis: Optional[float]
-    location: Optional[str]
     listed_price: Optional[float]
     listed_platform: Optional[str]
     sold_price: Optional[float]

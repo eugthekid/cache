@@ -14,7 +14,6 @@ function AddInventoryItem({ onClose, onAdded }: AddInventoryItemProps): React.JS
   const [quantity, setQuantity] = useState('1')
   const [status, setStatus] = useState<InventoryStatus>('in_hand')
   const [costBasis, setCostBasis] = useState('')
-  const [location, setLocation] = useState('')
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -31,7 +30,6 @@ function AddInventoryItem({ onClose, onAdded }: AddInventoryItemProps): React.JS
         quantity: Number(quantity),
         status,
         cost_basis: costBasis ? Number(costBasis) : null,
-        location: location || null,
         notes: notes || null
       })
       onAdded()
@@ -88,14 +86,9 @@ function AddInventoryItem({ onClose, onAdded }: AddInventoryItemProps): React.JS
           </Field>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <Field label="Cost basis">
-            <input className="field-input num" type="number" step="0.01" value={costBasis} onChange={(e) => setCostBasis(e.target.value)} placeholder="0.00" />
-          </Field>
-          <Field label="Location">
-            <input className="field-input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Closet A, Storage bin 3…" />
-          </Field>
-        </div>
+        <Field label="Cost basis">
+          <input className="field-input num" type="number" step="0.01" value={costBasis} onChange={(e) => setCostBasis(e.target.value)} placeholder="0.00" />
+        </Field>
 
         <Field label="Notes">
           <input className="field-input" value={notes} onChange={(e) => setNotes(e.target.value)} />

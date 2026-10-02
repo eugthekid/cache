@@ -290,12 +290,10 @@ class InventoryItem(Base):
 
     cost_basis: Mapped[float | None] = mapped_column(default=None)
 
-    # Free text for now ("Closet A", "Storage bin 3"). Deliberately not
-    # structured -- the user's eventual ask is tracking WHO an item shipped
-    # to (importing addresses/profiles), which is a real feature, not a
-    # bigger version of this field; that gets its own model when it's
-    # built rather than this column growing awkwardly into it.
-    location: Mapped[str | None] = mapped_column(default=None)
+    # The old free-text `location` column was retired from the model and API
+    # (2026-09-25). It is still physically present in existing databases,
+    # nullable and unused: dropping it would bump the schema version and make
+    # every earlier backup bundle unrestorable (see routers/backup.py).
 
     listed_price: Mapped[float | None] = mapped_column(default=None)
     listed_platform: Mapped[str | None] = mapped_column(default=None)

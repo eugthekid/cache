@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, type InventoryItem, type InventoryStatus, type Order } from '../api/client'
 import StatusPill from '../components/StatusPill'
 import EmptyState from '../components/EmptyState'
@@ -43,9 +43,6 @@ function compareGroups(a: ProductGroup, b: ProductGroup, sort: InventorySort): n
 type DraftItem = {
   status: InventoryStatus
   cost_basis: string
-  location: string
-  listed_price: string
-  listed_platform: string
   sold_price: string
   sold_platform: string
   sold_at: string
@@ -56,9 +53,6 @@ function itemToDraft(item: InventoryItem): DraftItem {
   return {
     status: item.status,
     cost_basis: item.cost_basis != null ? String(item.cost_basis) : '',
-    location: item.location ?? '',
-    listed_price: item.listed_price != null ? String(item.listed_price) : '',
-    listed_platform: item.listed_platform ?? '',
     sold_price: item.sold_price != null ? String(item.sold_price) : '',
     sold_platform: item.sold_platform ?? '',
     sold_at: toDateInput(item.sold_at),
@@ -100,6 +94,33 @@ function compareItems(
   }
 }
 
+/** Checkbox toggle with file-manager range selection: with `shiftKey` held
+ * and an earlier click as the anchor, every row between the two (in the
+ * order the list is displayed) takes the state the clicked row is moving
+ * to. Without shift, or when the anchor isn't in this list, it's a plain
+ * single toggle. */
+function toggleWithRange(
+  prev: Set<string>,
+  id: string,
+  anchor: string | null,
+  shiftKey: boolean,
+  orderedIds: string[]
+): Set<string> {
+  const next = new Set(prev)
+  const willCheck = !prev.has(id)
+  const from = shiftKey && anchor ? orderedIds.indexOf(anchor) : -1
+  const to = orderedIds.indexOf(id)
+  const span =
+    from !== -1 && to !== -1
+      ? orderedIds.slice(Math.min(from, to), Math.max(from, to) + 1)
+      : [id]
+  for (const key of span) {
+    if (willCheck) next.add(key)
+    else next.delete(key)
+  }
+  return next
+}
+
 function fromOrderLabel(item: InventoryItem, ordersById: Map<string, Order>): string {
   if (!item.order_id) return '—'
   const order = ordersById.get(item.order_id)
@@ -121,6 +142,11 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
   const [showAddItem, setShowAddItem] = useState(false)
   const [showBulkEdit, setShowBulkEdit] = useState(false)
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set())
+  /** Last row whose checkbox was clicked -- the anchor a Shift+click
+   * extends from. One per list, since a unit id never appears in the
+   * by-product list and vice versa. */
+  const lastCheckedRef = useRef<string | null>(null)
+  const lastCheckedGroupRef = useRef<string | null>(null)
   /** Selection for the "By product" view -- keyed by groupKey(), the same
    * scheme used everywhere else a product row needs an identity beyond
    * its (possibly absent) product_id. Kept separate from checkedIds
@@ -193,13 +219,11 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
 
   const filtersActive = search.trim() !== '' || categoryFilter !== 'all'
 
-  function toggleGroupChecked(key: string): void {
-    setCheckedGroupKeys((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
+  function toggleGroupChecked(key: string, shiftKey = false): void {
+    const anchor = lastCheckedGroupRef.current
+    const ordered = visibleGroups.map((g) => groupKey(g.product_id, g.name))
+    setCheckedGroupKeys((prev) => toggleWithRange(prev, key, anchor, shiftKey, ordered))
+    lastCheckedGroupRef.current = key
   }
 
   function toggleAllGroupsChecked(): void {
@@ -284,13 +308,14 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
     setDraft((prev) => (prev ? { ...prev, [key]: value } : prev))
   }
 
-  function toggleChecked(id: string): void {
-    setCheckedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+  function toggleChecked(
+    id: string,
+    shiftKey = false,
+    orderedIds: string[] = visibleItems.map((i) => i.id)
+  ): void {
+    const anchor = lastCheckedRef.current
+    setCheckedIds((prev) => toggleWithRange(prev, id, anchor, shiftKey, orderedIds))
+    lastCheckedRef.current = id
   }
 
   function toggleAllChecked(): void {
@@ -311,7 +336,7 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
     try {
       // Same date-only-control hazard as orders.purchased_at: only send
       // sold_at when the user actually moved the date, so an edit that
-      // just changes the location or price can't rewrite a real sale
+      // just changes the price or notes can't rewrite a real sale
       // time as midnight. Leaving it out also preserves the backend's
       // "mark sold with no date fills in now" rule (crud.py's
       // update_inventory_item), which only fires when sold_at is unset.
@@ -319,9 +344,6 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
       const updated = await api.inventory.update(selectedId, {
         status: draft.status,
         cost_basis: draft.cost_basis ? Number(draft.cost_basis) : null,
-        location: draft.location || null,
-        listed_price: draft.listed_price ? Number(draft.listed_price) : null,
-        listed_platform: draft.listed_platform || null,
         sold_price: draft.sold_price ? Number(draft.sold_price) : null,
         sold_platform: draft.sold_platform || null,
         sold_at: datePatchValue(original?.sold_at, draft.sold_at),
@@ -556,10 +578,12 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
                   name: 'Unmatched',
                   total_units: 0,
                   in_hand: 0,
-                  listed: 0,
+                  not_shipped: 0,
+                  in_transit: 0,
                   sold: 0,
                   total_cost_basis: 0,
                   total_sold_revenue: 0,
+                  avg_cost_basis: null,
                   avg_sale_price: null,
                   total_profit: null,
                   image_url: null,
@@ -594,7 +618,7 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
               onOpenProduct={(group) => setViewingProductKey(groupKey(group.product_id, group.name))}
               onChanged={load}
               checkedKeys={checkedGroupKeys}
-              onToggle={(group) => toggleGroupChecked(groupKey(group.product_id, group.name))}
+              onToggle={(group, shiftKey) => toggleGroupChecked(groupKey(group.product_id, group.name), shiftKey)}
               onToggleAll={toggleAllGroupsChecked}
             />
           ) : visibleItems.length === 0 ? (
@@ -628,14 +652,22 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
                     <tr
                       key={item.id}
                       className="row"
-                      onClick={() => selectItem(item)}
+                      onMouseDown={(e) => {
+                        if (e.shiftKey) e.preventDefault()
+                      }}
+                      onClick={(e) => (e.shiftKey ? toggleChecked(item.id, true) : selectItem(item))}
                       style={{
                         cursor: 'pointer',
                         background: item.id === selectedId ? 'linear-gradient(90deg, oklch(29% 0.06 215), oklch(27% 0.06 292 / 0.6))' : undefined
                       }}
                     >
                       <td onClick={(e) => e.stopPropagation()}>
-                        <input type="checkbox" checked={checkedIds.has(item.id)} onChange={() => toggleChecked(item.id)} />
+                        <input
+                          type="checkbox"
+                          checked={checkedIds.has(item.id)}
+                          onChange={() => undefined}
+                          onClick={(e) => toggleChecked(item.id, e.shiftKey)}
+                        />
                       </td>
                       <td style={{ fontWeight: 500 }}>{productName(item, ordersById)}</td>
                       <td className="num" style={{ color: 'var(--text-secondary)' }}>
@@ -687,12 +719,6 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
                 </select>
               </Field>
             </div>
-
-            {draft.status !== 'sold' && (
-              <Field label="Location">
-                <input className="field-input" value={draft.location} onChange={(e) => updateDraft('location', e.target.value)} placeholder="Closet A, Storage bin 3…" />
-              </Field>
-            )}
 
             {draft.status === 'sold' && (
               <>
