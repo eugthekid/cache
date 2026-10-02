@@ -37,7 +37,8 @@ existing query path keeps working untouched.
 """
 
 import re
-from typing import Iterable, Optional
+import unicodedata
+from typing import Iterable, Mapping, Optional
 
 from sqlalchemy.orm import Session
 
@@ -134,6 +135,59 @@ def emits_one_message_per_line(source_type: Optional[str]) -> bool:
     return (source_type or "") not in PER_ORDER_SOURCE_TYPES
 
 
+# Words that appear in nearly every product title and so say nothing about
+# WHICH product it is, plus the "Styles May Vary" boilerplate a retailer
+# prints on blind items. Dropped before comparing two names.
+_NAME_STOPWORDS = frozenset(
+    "pokemon tcg trading card cards game tading the of and or a an in with for "
+    "styles style may vary".split()
+)
+_NAME_TOKEN = re.compile(r"[a-z0-9]+")
+
+MIN_SHARED_NAME_TOKENS = 2
+MIN_NAME_OVERLAP = 0.5
+
+# "{message_id}:{kind}[:{line_index}]" -- see email_ingest/ingest.py.
+_EMAIL_KIND = re.compile(r":(confirm|ship|arrived|cancel\w*)(?::\d+)?$")
+
+
+def name_tokens(text: Optional[str]) -> frozenset[str]:
+    """The distinguishing words of a product name: accents folded, lower
+    cased, boilerplate and bare numbers removed ("EX Box 2" keeps "ex" and
+    "box"; the 2 is a listing counter, not part of the product)."""
+    if not text:
+        return frozenset()
+    folded = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    return frozenset(
+        t
+        for t in _NAME_TOKEN.findall(folded.lower())
+        if t not in _NAME_STOPWORDS and not t.isdigit()
+    )
+
+
+def name_affinity(a: Optional[str], b: Optional[str]) -> tuple[int, float]:
+    """(shared distinguishing words, shared / the shorter name's word count).
+    Overlap is measured against the SHORTER name because the two texts for
+    one line differ in specificity, not in kind: a generic listing title is
+    a near-subset of the specific title the retailer prints at shipment."""
+    ta, tb = name_tokens(a), name_tokens(b)
+    if not ta or not tb:
+        return 0, 0.0
+    shared = len(ta & tb)
+    return shared, shared / min(len(ta), len(tb))
+
+
+def claim_kind(external_id: Optional[str], source_type: Optional[str]) -> Optional[str]:
+    """Which lifecycle event a message reports, for the two that name a
+    product: 'confirm' (a placed order -- every non-email source counts as
+    one) or 'ship'. Arrivals and cancellations return None."""
+    if (source_type or "") not in PER_ORDER_SOURCE_TYPES:
+        return "confirm"
+    found = _EMAIL_KIND.search(external_id or "")
+    kind = found.group(1) if found else None
+    return kind if kind in ("confirm", "ship") else None
+
+
 def match_line(
     cart: Iterable[models.Order],
     exclude_source_id: Optional[str] = None,
@@ -141,6 +195,9 @@ def match_line(
     unit_price: Optional[float] = None,
     quantity: Optional[int] = None,
     product_id: Optional[str] = None,
+    name: Optional[str] = None,
+    kind: Optional[str] = None,
+    claimed: Optional[Mapping[str, set[str]]] = None,
 ) -> Optional[models.Order]:
     """
     Pick which line of an already-identified cart an incoming claim
@@ -199,6 +256,31 @@ def match_line(
          happens to be first -- unmatched is visible and fixable, a wrong
          merge is not.
 
+      6. NAME AFFINITY, for a cart line whose text changes between events.
+         A retailer's confirmation prints a marketing title ("Pokemon 30th
+         Anniversary EX Box 2", "Scarlet Violet Elite Trainer Box") and its
+         shipping notice prints the specific one ("...30th Celebration
+         Greninja ex Box", "...Prismatic Evolutions Elite Trainer Box").
+         Those resolve to DIFFERENT products, so rules 2-3 can never pair
+         them, and the ship notice has no price or SKU for rules 1 and 4 --
+         which is how one purchase kept splitting into a row per email.
+         The claim adopts a line when ALL of these hold:
+           - it carries a name and is a confirm or ship event
+           - the cart has no line of its own product already (else rules
+             2-3 were the right answer and failing them means "different
+             line")
+           - the line has no claim yet of the same kind from ANY source
+             (a second Discord line, or a second ship for the same line
+             under a different name, is another purchase, not this).
+             The observed mismatch is always confirm-vs-ship, so a
+             confirm-vs-confirm pair is left to rules 1-4 alone
+           - quantities agree when both are known
+           - the names share >= 2 distinguishing words covering >= half of
+             the shorter name
+           - exactly one line scores best; a tie leaves it unmatched
+         A wrong merge destroys a unit, an unmatched claim only shows as a
+         visible duplicate, so every ambiguity resolves to unmatched.
+
     KNOWN LIMIT, to settle in Phase 2 against real mail: a cart can hold
     two Discord lines of the same product at quantity 1 each (real
     example, P0035996055) while the retailer's email states that product
@@ -248,6 +330,29 @@ def match_line(
             if quantity is not None and (order.quantity or 1) != quantity:
                 continue
             return order
+
+    # Rule 6 -- see docstring.
+    if name and kind is not None and claimed is not None:
+        already_has_own_row = product_id is not None and any(
+            o.product_id == product_id for o in rows
+        )
+        if not already_has_own_row:
+            scored = []
+            for order in rows:
+                if kind in claimed.get(order.id, ()):
+                    continue
+                if (
+                    quantity is not None
+                    and order.quantity is not None
+                    and order.quantity != quantity
+                ):
+                    continue
+                shared, overlap = name_affinity(name, order.raw_product_text)
+                if shared >= MIN_SHARED_NAME_TOKENS and overlap >= MIN_NAME_OVERLAP:
+                    scored.append(((shared, overlap), order))
+            scored.sort(key=lambda s: s[0], reverse=True)
+            if scored and (len(scored) == 1 or scored[0][0] > scored[1][0]):
+                return scored[0][1]
 
     # Rule 5 -- see docstring. Only when NOTHING was given to match on;
     # a claim that supplied a sku/product_id/unit_price and simply failed

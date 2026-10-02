@@ -242,6 +242,26 @@ def find_existing_line(db: Session, user_id: str, order_in) -> Optional[models.O
         else None
     )
 
+    kind = matching.claim_kind(
+        getattr(order_in, "external_id", None), source.type if source else None
+    )
+    claimed: dict[str, set[str]] = {}
+    if kind is not None:
+        seen = (
+            db.query(
+                models.IngestedMessage.order_id,
+                models.IngestedMessage.external_id,
+                models.Source.type,
+            )
+            .join(models.Source, models.Source.id == models.IngestedMessage.source_id)
+            .filter(models.IngestedMessage.order_id.in_([o.id for o in cart]))
+            .all()
+        )
+        for order_id, external_id, source_type in seen:
+            row_kind = matching.claim_kind(external_id, source_type)
+            if row_kind is not None:
+                claimed.setdefault(order_id, set()).add(row_kind)
+
     return matching.match_line(
         cart,
         exclude_source_id=exclude,
@@ -249,6 +269,9 @@ def find_existing_line(db: Session, user_id: str, order_in) -> Optional[models.O
         unit_price=order_in.unit_price,
         quantity=order_in.quantity,
         product_id=product.id if product else None,
+        name=products.display_name(order_in.raw_product_text) if order_in.raw_product_text else None,
+        kind=kind,
+        claimed=claimed,
     )
 
 
@@ -536,8 +559,8 @@ def reconcile_order_inventory(db: Session, order: models.Order) -> None:
             # RESTORE BEFORE CREATING. These units were soft-deleted by an
             # earlier pass of this same function when the order left
             # 'success' (or never existed at all), and restored ones
-            # carry things the user put there by hand -- a storage
-            # location, notes. Creating fresh rows instead would orphan
+            # carry things the user put there by hand -- notes,
+            # sale details. Creating fresh rows instead would orphan
             # all of that behind new ids and leave the old ones dead
             # forever.
             #
