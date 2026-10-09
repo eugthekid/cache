@@ -192,6 +192,7 @@ def resolve_order_from_messages(db: Session, order: models.Order) -> models.Orde
     resolved = claims.apply_overrides(resolved, order.user_overrides)
 
     previous_shipping_status = order.shipping_status
+    previous_unit_price = order.unit_price
     for field, value in resolved.items():
         setattr(order, field, value)
 
@@ -202,8 +203,38 @@ def resolve_order_from_messages(db: Session, order: models.Order) -> models.Orde
     if product:
         order.product_id = product.id
     sync_tracking_fields(order, previous_shipping_status)
+    _follow_order_price(db, order, previous_unit_price)
     reconcile_order_inventory(db, order)
     return order
+
+
+def _follow_order_price(db: Session, order: models.Order, previous_price: Optional[float]) -> None:
+    """
+    When an order's price improves (the Discord bot's pre-tax cart price,
+    then the retailer's own tax-and-shipping-inclusive figure from the
+    confirmation email), the units it spawned must follow -- otherwise
+    cost_basis keeps the old, understated number forever, because a unit's
+    cost is copied from the order once at creation and the backfill in
+    reconcile_order_inventory only fills a cost that is still empty.
+
+    Only units whose cost still EQUALS the order's previous price (or has
+    none) move. A cost the user typed in by hand differs from it and is
+    left alone, and sold units are skipped -- a sale deliberately re-costs
+    them at the product's average.
+    """
+    new_price = order.unit_price
+    if new_price is None or previous_price is None or abs(new_price - previous_price) < 0.005:
+        return
+    items = (
+        db.query(models.InventoryItem)
+        .filter(models.InventoryItem.order_id == order.id)
+        .filter(models.InventoryItem.deleted_at.is_(None))
+        .filter(models.InventoryItem.status != "sold")
+        .all()
+    )
+    for item in items:
+        if item.cost_basis is None or abs(item.cost_basis - previous_price) < 0.005:
+            item.cost_basis = new_price
 
 
 def find_existing_line(db: Session, user_id: str, order_in) -> Optional[models.Order]:
@@ -554,7 +585,17 @@ def reconcile_order_inventory(db: Session, order: models.Order) -> None:
         creation_status = target_status or "not_shipped"
 
         quantity = order.quantity or 1
-        missing = quantity - len(live_items)
+        # Units the user removed by hand (Edit counts) are accounted for
+        # even though they're soft-deleted: counting them as "missing"
+        # would restore them on the very next sync and undo the edit.
+        removed_by_hand = (
+            db.query(models.InventoryItem)
+            .filter(models.InventoryItem.order_id == order.id)
+            .filter(models.InventoryItem.deleted_at.isnot(None))
+            .filter(models.InventoryItem.manual.is_(True))
+            .count()
+        )
+        missing = quantity - len(live_items) - removed_by_hand
         if missing > 0:
             # RESTORE BEFORE CREATING. These units were soft-deleted by an
             # earlier pass of this same function when the order left
@@ -575,6 +616,7 @@ def reconcile_order_inventory(db: Session, order: models.Order) -> None:
                 db.query(models.InventoryItem)
                 .filter(models.InventoryItem.order_id == order.id)
                 .filter(models.InventoryItem.deleted_at.isnot(None))
+                .filter(models.InventoryItem.manual.is_(False))
                 .filter(models.InventoryItem.status.in_(SHIPPABLE_ITEM_STATUSES))
                 .order_by(models.InventoryItem.unit_index)
                 .all()
@@ -616,12 +658,12 @@ def reconcile_order_inventory(db: Session, order: models.Order) -> None:
         if target_status is not None:
             db.flush()
             for item in live_items:
-                if item.status in SHIPPABLE_ITEM_STATUSES:
+                if item.status in SHIPPABLE_ITEM_STATUSES and not item.manual:
                     item.status = target_status
     else:
         now = _now()
         for item in live_items:
-            if item.status in SHIPPABLE_ITEM_STATUSES:
+            if item.status in SHIPPABLE_ITEM_STATUSES and not item.manual:
                 item.deleted_at = now
 
 

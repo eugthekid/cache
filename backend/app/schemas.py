@@ -486,3 +486,67 @@ class LicenseStatus(BaseModel):
     # key on the Settings screen, never enough to reconstruct it.
     key_suffix: Optional[str] = None
     activated_at: Optional[datetime] = None
+
+
+# --- per-product dashboard (see app/product_dashboard.py) ---
+
+
+class RetailerBreakdown(BaseModel):
+    retailer: str
+    units: int
+    order_placed: int
+    in_transit: int
+    # In hand and sold together: which sold unit came from which retailer
+    # isn't tracked, so the two aren't split per retailer.
+    in_hand_or_sold: int
+    avg_unit_price: Optional[float] = None
+    min_unit_price: Optional[float] = None
+    max_unit_price: Optional[float] = None
+
+
+class SaleOut(BaseModel):
+    id: str
+    sold_at: datetime
+    quantity: int
+    unit_price: float
+    unit_cost: Optional[float] = None
+    platform: Optional[str] = None
+    profit: Optional[float] = None
+
+
+class ProductDashboard(BaseModel):
+    product_id: str
+    name: str
+    category: Optional[str] = None
+    total_units: int
+    order_placed: int
+    in_transit: int
+    in_hand: int
+    sold: int
+    invested: float
+    avg_cost: Optional[float] = None
+    retailers: list[RetailerBreakdown]
+    # Stores units can still be added for by hand (see retailers.MANUAL_RETAILERS).
+    addable_retailers: list[str] = []
+    sales: list[SaleOut]
+
+
+class RetailerCountEdit(BaseModel):
+    retailer: str
+    order_placed: int
+    in_transit: int
+    in_hand_or_sold: int
+    # What each unit cost. Only used when this edit has to create units for a
+    # store with no orders to take a price from.
+    unit_price: Optional[float] = None
+
+
+class CountsUpdate(BaseModel):
+    retailers: list[RetailerCountEdit]
+
+
+class SaleCreate(BaseModel):
+    quantity: int
+    unit_price: float
+    platform: Optional[str] = None
+    sold_at: Optional[datetime] = None

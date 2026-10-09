@@ -10,6 +10,7 @@ import AddInventoryItem from '../components/AddInventoryItem'
 import BulkEditItems from '../components/BulkEditItems'
 import GroupedInventory from '../components/GroupedInventory'
 import ProductDetail from '../components/ProductDetail'
+import ProductDashboard from '../components/ProductDashboard'
 import type { ProductGroup } from '../api/client'
 import type { Screen } from '../components/NavRail'
 import { datePatchValue, toDateInput } from '../dates'
@@ -216,6 +217,10 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
   const visibleItems = items
     .filter((item) => matchesFilters(productName(item, ordersById), categoryByProductId.get(productIdFor(item) ?? '__unmatched__') ?? null))
     .sort((a, b) => compareItems(a, b, sort, ordersById))
+
+  const viewingGroup = viewingProductKey
+    ? groups.find((g) => groupKey(g.product_id, g.name) === viewingProductKey)
+    : undefined
 
   const filtersActive = search.trim() !== '' || categoryFilter !== 'all'
 
@@ -466,7 +471,7 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
         </div>
       </div>
 
-      {(view === 'units' || (view === 'grouped' && viewingProductKey)) && checkedIds.size > 0 && (
+      {(view === 'units' || (view === 'grouped' && viewingProductKey && !viewingGroup?.product_id)) && checkedIds.size > 0 && (
         <BulkActionBar
           count={checkedIds.size}
           onDelete={bulkDelete}
@@ -570,6 +575,13 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
                 }
               />
             </>
+          ) : view === 'grouped' && viewingProductKey && viewingGroup?.product_id ? (
+            <ProductDashboard
+              key={viewingGroup.product_id}
+              group={viewingGroup}
+              onBack={() => setViewingProductKey(null)}
+              onChanged={() => load(true)}
+            />
           ) : view === 'grouped' && viewingProductKey ? (
             <ProductDetail
               group={

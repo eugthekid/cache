@@ -323,6 +323,55 @@ export interface Product {
 }
 
 /** One row of the grouped inventory view -- "I hold 12 of these". */
+export interface ProductRetailerBreakdown {
+  retailer: string
+  units: number
+  order_placed: number
+  in_transit: number
+  /** In hand and sold together -- which sold unit came from which retailer
+   * isn't tracked. */
+  in_hand_or_sold: number
+  avg_unit_price: number | null
+  min_unit_price: number | null
+  max_unit_price: number | null
+}
+
+export interface ProductSale {
+  id: string
+  sold_at: string
+  quantity: number
+  unit_price: number
+  unit_cost: number | null
+  platform: string | null
+  profit: number | null
+}
+
+export interface ProductDashboardData {
+  product_id: string
+  name: string
+  category: string | null
+  total_units: number
+  order_placed: number
+  in_transit: number
+  in_hand: number
+  sold: number
+  invested: number
+  avg_cost: number | null
+  retailers: ProductRetailerBreakdown[]
+  /** Stores units can still be added for by hand. */
+  addable_retailers: string[]
+  sales: ProductSale[]
+}
+
+export interface RetailerCountEdit {
+  retailer: string
+  order_placed: number
+  in_transit: number
+  in_hand_or_sold: number
+  /** What each unit cost -- only needed when adding a store with no orders. */
+  unit_price?: number | null
+}
+
 export interface ProductGroup {
   product_id: string | null
   name: string | null
@@ -588,7 +637,17 @@ export const api = {
     merge: (sourceId: string, targetId: string) =>
       post<BulkResult>('/products/merge', { source_id: sourceId, target_id: targetId }),
     rename: (id: string, canonicalName: string, category?: string | null) =>
-      patch<Product>(`/products/${id}`, { canonical_name: canonicalName, category })
+      patch<Product>(`/products/${id}`, { canonical_name: canonicalName, category }),
+    dashboard: (id: string) => get<ProductDashboardData>(`/products/${id}/dashboard`),
+    /** Sets each listed retailer's stage counts; returns the refreshed dashboard. */
+    updateCounts: (id: string, retailers: RetailerCountEdit[]) =>
+      put<ProductDashboardData>(`/products/${id}/counts`, { retailers }),
+    recordSale: (
+      id: string,
+      sale: { quantity: number; unit_price: number; platform?: string | null; sold_at?: string | null }
+    ) => post<ProductDashboardData>(`/products/${id}/sales`, sale),
+    undoSale: (id: string, saleId: string) =>
+      request<ProductDashboardData>(`/products/${id}/sales/${saleId}`, { method: 'DELETE' })
   },
 
   sync: {

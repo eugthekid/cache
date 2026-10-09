@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app import crud, models, products, schemas
+from app import crud, models, product_dashboard, products, schemas
 from app.database import get_db
 
 router = APIRouter(prefix="/products", tags=["products"])
@@ -220,6 +220,61 @@ def merge(body: schemas.ProductMerge, db: Session = Depends(get_db)):
     if moved == 0 and body.source_id == body.target_id:
         raise HTTPException(status_code=400, detail="Can't merge a product into itself.")
     return schemas.BulkResult(updated=moved)
+
+
+def _get_product(db: Session, product_id: str) -> tuple[models.User, models.Product]:
+    user = crud.get_or_create_default_user(db)
+    product = db.query(models.Product).filter_by(id=product_id, user_id=user.id).first()
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return user, product
+
+
+@router.get("/{product_id}/dashboard", response_model=schemas.ProductDashboard)
+def product_dashboard_view(product_id: str, db: Session = Depends(get_db)):
+    """Units by retailer and stage, totals, and recorded sales for one product."""
+    user, product = _get_product(db, product_id)
+    return product_dashboard.build_dashboard(db, user.id, product)
+
+
+@router.put("/{product_id}/counts", response_model=schemas.ProductDashboard)
+def update_counts(product_id: str, body: schemas.CountsUpdate, db: Session = Depends(get_db)):
+    """Set each listed retailer's stage counts. All retailers apply together
+    or not at all."""
+    user, product = _get_product(db, product_id)
+    try:
+        product_dashboard.apply_counts(db, user.id, product, [e.model_dump() for e in body.retailers])
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc))
+    db.commit()
+    return product_dashboard.build_dashboard(db, user.id, product)
+
+
+@router.post("/{product_id}/sales", response_model=schemas.ProductDashboard)
+def create_sale(product_id: str, body: schemas.SaleCreate, db: Session = Depends(get_db)):
+    user, product = _get_product(db, product_id)
+    try:
+        product_dashboard.record_sale(
+            db, user.id, product, body.quantity, body.unit_price, body.platform, body.sold_at
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc))
+    db.commit()
+    return product_dashboard.build_dashboard(db, user.id, product)
+
+
+@router.delete("/{product_id}/sales/{sale_id}", response_model=schemas.ProductDashboard)
+def delete_sale(product_id: str, sale_id: str, db: Session = Depends(get_db)):
+    """Undo a sale: its units go back in hand at their original cost."""
+    user, product = _get_product(db, product_id)
+    sale = db.query(models.Sale).filter_by(id=sale_id, user_id=user.id, product_id=product.id).first()
+    if sale is None:
+        raise HTTPException(status_code=404, detail="Sale not found")
+    product_dashboard.undo_sale(db, sale)
+    db.commit()
+    return product_dashboard.build_dashboard(db, user.id, product)
 
 
 @router.patch("/{product_id}", response_model=schemas.ProductOut)

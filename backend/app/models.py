@@ -312,6 +312,20 @@ class InventoryItem(Base):
     notes: Mapped[str | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
+    # True once the user set this unit's stage (or removed/added it) by hand
+    # from the product screen's "Edit counts". The automatic pipeline --
+    # crud.reconcile_order_inventory, fed by emails and live tracking --
+    # must leave these alone, or the very next shipping update would undo
+    # the correction. A unit removed this way also stays soft-deleted
+    # instead of being "restored" because its order still says quantity N.
+    manual: Mapped[bool] = mapped_column(default=False, server_default="0")
+
+    # Which store a unit with NO order came from, so units added by hand from
+    # a retailer Cache doesn't track still group under it on the product
+    # screen. Units that have an order take their retailer from the order and
+    # leave this empty.
+    retailer: Mapped[str | None] = mapped_column(default=None)
+
     # Kept ONLY for standalone units -- ones imported directly from a
     # spreadsheet in inventory mode, with no order behind them (order_id
     # NULL). Nothing re-syncs those, so a delete can't be undone by
@@ -527,3 +541,28 @@ class AppSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(default=_now)
 
     user: Mapped["User"] = relationship(back_populates="app_settings")
+
+
+class Sale(Base):
+    """
+    One recorded sale of N units of a product -- the unit of selling now
+    that inventory is tracked as pooled counts instead of picking units.
+
+    Recording one marks N in-hand units sold at `unit_price` and costs each
+    at the product's AVERAGE cost (`unit_cost`), not whichever unit happened
+    to be picked, so profit doesn't depend on an arbitrary choice. Each
+    unit's original cost_basis is kept in `item_costs` ({item_id: cost}) so
+    a sale can be undone exactly.
+    """
+    __tablename__ = "sales"
+
+    id: Mapped[str] = mapped_column(primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    product_id: Mapped[str] = mapped_column(ForeignKey("products.id"))
+    quantity: Mapped[int]
+    unit_price: Mapped[float]
+    unit_cost: Mapped[float | None] = mapped_column(default=None)
+    platform: Mapped[str | None] = mapped_column(default=None)
+    sold_at: Mapped[datetime] = mapped_column(default=_now)
+    item_costs: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(default=_now)

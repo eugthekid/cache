@@ -49,7 +49,14 @@ DISPLAY_NAMES = {
     "shopify.com": "Shopify",
     "amazon.com": "Amazon",
     "nyc.gov": "NYC City Store",
+    "menards.com": "Menards",
 }
+
+# Retailers the product screen's "Edit counts" can add units for by hand --
+# stores Cache has no email or Discord feed for. Deliberately a short fixed
+# list for now; extend it here (and give the store a mark and color in the
+# desktop app's retailerBrand.tsx) when another is needed.
+MANUAL_RETAILERS = ["Walmart", "Crunchyroll", "Best Buy", "Menards"]
 
 
 def _registrable_domain(host: str) -> str:
