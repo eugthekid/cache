@@ -20,12 +20,14 @@ by "Order Subtotal" -- text outside that window (shipping address,
 scanned, which is what keeps this immune to the upsell-block trap confirmed
 on Target and Walmart (see docs/RECONNAISSANCE.md).
 
-TAX ALLOCATION: PC's confirmation gives one cart-level Sales Tax figure,
-not a per-line one. Proportional allocation by extended line price
-(unit_price * qty) is the same discriminator already verified against
-real data; that's what unit_price below returns -- the tax-inclusive
-per-unit cost, not the raw catalog price -- because that IS the number
-Cache's cost_basis field means to hold.
+TAX AND SHIPPING ALLOCATION: PC's confirmation gives one cart-level Sales
+Tax figure and one Shipping figure, not per-line ones. Tax is allocated in
+proportion to extended line price (unit_price * qty), the discriminator
+already verified against real data. Shipping is split EQUALLY across the
+order's lines (a flat per-order charge has no reason to follow price).
+unit_price below is the tax-and-shipping-inclusive per-unit cost, not the
+raw catalog price, because that IS the number Cache's cost_basis field
+means to hold.
 
 DELIBERATELY NOT ROUNDED TO THE CENT PER LINE. First draft rounded each
 line's unit_price to 2 decimals before returning it, which reconciles
@@ -96,6 +98,19 @@ _CANCEL_SKU_ROW_RE = re.compile(r"SKU\s*\#\s*:\s*(?P<sku>[\w-]+).*?Qty\s*:\s*(?P
 # a dropped duplicate is fine; a wrong pairing from a mangled row is not.
 _SKU_ONLY_ROW_RE = re.compile(r"^\s*\|?\s*SKU\s*\#\s*:\s*(?P<sku>[\w-]+)\s*$")
 
+# The CONFIRMATION template's own version of that drift, found live
+# 2026-10-08: its line items come out as "SKU #: 10-10447-111" / "Qty: 2" /
+# blank / "Price: $59.99 |" on separate lines, not the one-line row
+# _SKU_ROW_RE expects, so parse_confirmation returned [] for EVERY real
+# confirmation and every Pokemon Center order kept the Discord bot's
+# pre-tax cart price (59.99 for an Elite Trainer Box that really cost
+# ~65.31 after tax). Same fail-closed rule as the shapes above: each
+# regex anchors the whole line, so PC's mangled repeat renderings (a
+# price glued to the next copy's "SKU #" across a "|") never match.
+_SKU_LINE_RE = re.compile(r"^\s*\|?\s*SKU\s*\#\s*:\s*(?P<sku>[\w-]+)\s*$")
+_QTY_LINE_RE = re.compile(r"^\s*Qty\s*:\s*(?P<qty>\d+)\s*$")
+_PRICE_LINE_RE = re.compile(r"^\s*Price\s*:\s*\$(?P<price>[\d,]+\.\d{2})\s*\|?\s*$")
+
 # A THIRD shape for the same row, found live 2026-10-01 against every one of
 # a SHIPPED email's lines (verified across 4 real orders, including
 # P0038927021 -- the order this module's docstring long credited as proof
@@ -146,9 +161,9 @@ def _to_float(money: str) -> float:
 
 def parse_confirmation(body: str) -> list[Line]:
     """
-    Extract every cart line between "Order Summary" and "Order Subtotal",
-    with tax and shipping allocated proportionally across lines by their
-    extended (pre-tax) price.
+    Extract every cart line between "Order Summary" and "Order Subtotal".
+    Tax is allocated across lines in proportion to their extended (pre-tax)
+    price; shipping is split equally across lines.
 
     Returns [] rather than raising when the expected section markers
     aren't found -- a template change should surface as "0 lines parsed,
@@ -170,7 +185,28 @@ def parse_confirmation(body: str) -> list[Line]:
     # what actually guarantees the right name attaches to the right SKU.
     raw_lines: list[tuple[str, str, int, float]] = []
     pending_name: Optional[str] = None
+    # Multi-line row state: None, "qty" (SKU seen), or "price" (qty seen).
+    row_state: Optional[str] = None
+    row_sku: Optional[str] = None
+    row_qty: Optional[int] = None
     for line in window.splitlines():
+        if row_state == "qty":
+            qty_m = _QTY_LINE_RE.match(line)
+            if qty_m:
+                row_qty = int(qty_m.group("qty"))
+                row_state = "price"
+            else:
+                row_state = None
+            continue
+        if row_state == "price":
+            if not line.strip():
+                continue
+            price_m = _PRICE_LINE_RE.match(line)
+            if price_m and pending_name and row_sku and row_qty:
+                raw_lines.append((pending_name, row_sku, row_qty, _to_float(price_m.group("price"))))
+            pending_name = None
+            row_state = None
+            continue
         sku_m = _SKU_ROW_RE.search(line)
         if sku_m:
             if pending_name:
@@ -179,6 +215,12 @@ def parse_confirmation(body: str) -> list[Line]:
                 )
             pending_name = None
             continue
+        if pending_name:
+            sku_line_m = _SKU_LINE_RE.match(line)
+            if sku_line_m:
+                row_sku = sku_line_m.group("sku")
+                row_state = "qty"
+                continue
         name_m = _NAME_ROW_RE.match(line)
         if name_m:
             text = name_m.group(1).strip()
@@ -209,17 +251,20 @@ def parse_confirmation(body: str) -> list[Line]:
     ship_m = _SHIP_RE.search(body)
     tax = _to_float(tax_m.group(1)) if tax_m else 0.0
     shipping = _to_float(ship_m.group(1)) if ship_m else 0.0
-    extras = tax + shipping
 
     extended = [price * qty for _, _, qty, price in raw_lines]
     pretax_total = sum(extended)
 
     out: list[Line] = []
     for (name, sku, qty, price), ext in zip(raw_lines, extended):
-        share = (ext / pretax_total * extras) if pretax_total else 0.0
+        # Tax follows the money (proportional to the line's extended price);
+        # shipping is a flat per-order charge, so it is split EQUALLY across
+        # the order's lines (the user's rule, 2026-10-08) rather than by price.
+        tax_share = (ext / pretax_total * tax) if pretax_total else 0.0
+        ship_share = shipping / len(raw_lines)
         # Not rounded here -- see module docstring on why per-line rounding
         # would drift the order total by a cent on any qty > 1 line.
-        unit_price = (ext + share) / qty
+        unit_price = (ext + tax_share + ship_share) / qty
         out.append(Line(raw_product_text=name, external_sku=sku, quantity=qty, unit_price=unit_price))
     return out
 
