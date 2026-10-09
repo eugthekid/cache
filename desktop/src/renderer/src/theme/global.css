@@ -11,12 +11,15 @@
  * unnecessary -- see the empty-states conversation).
  */
 
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
 
 :root {
-  --font-display: 'Space Grotesk', system-ui, sans-serif;
-  --font-body: 'IBM Plex Sans', system-ui, sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --font-display: 'DM Sans', system-ui, sans-serif;
+  --font-body: 'DM Sans', system-ui, sans-serif;
+  --font-mono: 'DM Mono', ui-monospace, monospace;
+  /* DM Mono only ships 400 and 500. Without this, a 600 or 700 request on a
+     number or label gets a browser-faked bold, which looks smeared. */
+  font-synthesis-weight: none;
 
   --bg: oklch(12% 0.012 260);
   --rail-bg: oklch(26% 0.025 255 / 0.4);
