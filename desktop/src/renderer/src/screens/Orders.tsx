@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type Order, type OrderSort, type OrderStatus, type ShippingStatus } from '../api/client'
 import GroupedOrders, { groupOrders, sortGroups } from '../components/GroupedOrders'
-import ColumnPicker from '../components/ColumnPicker'
-import StatusPill from '../components/StatusPill'
 import ImportWizard from '../components/ImportWizard'
 import EmptyState from '../components/EmptyState'
 import ErrorState from '../components/ErrorState'
@@ -17,109 +15,9 @@ function money(n: number): string {
   return `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
-/** The order total, from the per-unit price the API stores. */
-function orderTotal(order: Order): number | null {
-  return order.unit_price != null ? order.unit_price * (order.quantity ?? 1) : null
-}
+/** The filter has two options; a cancelled order counts as failed. */
+const FILTER_STATUSES: OrderStatus[] = ['success', 'failed']
 
-const FAINT = { color: 'var(--text-secondary)' } as const
-
-/**
- * Every column the "All lines" table can show, in table order. Which ones
- * are actually rendered is the user's choice (persisted in localStorage --
- * see COLUMNS_KEY); DEFAULT_COLUMNS is what a fresh install shows.
- *
- * The row checkbox is deliberately NOT in here: it isn't data, it can't be
- * turned off without breaking bulk actions, and it always sits first.
- */
-const COLUMNS: {
-  key: string
-  label: string
-  render: (order: Order) => React.ReactNode
-  cellClass?: string
-  cellStyle?: React.CSSProperties
-}[] = [
-  { key: 'product', label: 'Product', render: (o) => o.product_name ?? o.raw_product_text ?? '—', cellStyle: { fontWeight: 500 } },
-  { key: 'order_number', label: 'Order #', render: (o) => o.order_number || 'N/A', cellClass: 'num', cellStyle: { fontSize: 12, ...FAINT } },
-  { key: 'retailer', label: 'Retailer', render: (o) => o.retailer ?? o.site ?? '—', cellStyle: FAINT },
-  { key: 'profile', label: 'Profile', render: (o) => o.profile ?? '—', cellStyle: FAINT },
-  { key: 'category', label: 'Category', render: (o) => o.category ?? '—', cellStyle: FAINT },
-  { key: 'order_total', label: 'Order total', render: (o) => { const t = orderTotal(o); return t != null ? money(t) : '—' }, cellClass: 'num' },
-  { key: 'unit_price', label: 'Unit price', render: (o) => (o.unit_price != null ? money(o.unit_price) : '—'), cellClass: 'num', cellStyle: FAINT },
-  { key: 'quantity', label: 'Qty', render: (o) => o.quantity ?? '—', cellClass: 'num' },
-  { key: 'purchased_at', label: 'Date', render: (o) => o.purchased_at?.slice(0, 10) ?? '—', cellClass: 'num', cellStyle: FAINT },
-  { key: 'status', label: 'Status', render: (o) => <StatusPill status={o.status} /> },
-  {
-    key: 'shipping_status',
-    label: 'Shipping',
-    // Shipping only means something for an order that actually went
-    // through -- a failed/cancelled one never ships, so showing
-    // 'not_shipped' there would read as a pending delivery.
-    render: (o) =>
-      o.status === 'success' || o.status === 'pending' ? (
-        <StatusPill status={o.shipping_status} />
-      ) : (
-        <span style={{ color: 'var(--text-faint)' }}>—</span>
-      )
-  },
-  { key: 'carrier', label: 'Carrier', render: (o) => o.carrier_label ?? '—', cellStyle: FAINT },
-  {
-    key: 'tracking_number',
-    label: 'Tracking #',
-    // Links straight to the carrier's page when we know the carrier;
-    // plain text otherwise, since there's nowhere meaningful to point.
-    render: (o) =>
-      o.tracking_number ? (
-        o.tracking_url ? (
-          <a
-            href={o.tracking_url}
-            target="_blank"
-            rel="noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            style={{ color: 'var(--accent-cyan)', textDecoration: 'none' }}
-          >
-            {o.tracking_number}
-          </a>
-        ) : (
-          o.tracking_number
-        )
-      ) : (
-        '—'
-      ),
-    cellClass: 'num',
-    cellStyle: { fontSize: 12, ...FAINT }
-  },
-  {
-    key: 'estimated_delivery',
-    label: 'Est. delivery',
-    // Stays "—" until a live tracking provider is configured; the column
-    // exists now so the data has somewhere to land the moment one is.
-    render: (o) => o.estimated_delivery?.slice(0, 10) ?? '—',
-    cellClass: 'num',
-    cellStyle: FAINT
-  },
-  { key: 'ship_to_label', label: 'Ship to', render: (o) => o.ship_to_label ?? '—', cellStyle: FAINT }
-]
-
-const DEFAULT_COLUMNS = [
-  'product', 'order_number', 'retailer', 'profile', 'order_total', 'quantity', 'status', 'shipping_status'
-]
-const COLUMNS_KEY = 'cache_orders_columns'
-
-function loadColumns(): Set<string> {
-  try {
-    const raw = localStorage.getItem(COLUMNS_KEY)
-    if (!raw) return new Set(DEFAULT_COLUMNS)
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return new Set(DEFAULT_COLUMNS)
-    // Drop anything that's no longer a real column, so a stored setting
-    // from an older build can't leave a phantom header behind.
-    const known = parsed.filter((k): k is string => typeof k === 'string' && COLUMNS.some((c) => c.key === k))
-    return known.length ? new Set(known) : new Set(DEFAULT_COLUMNS)
-  } catch {
-    return new Set(DEFAULT_COLUMNS)
-  }
-}
 const SHIPPING_STATUSES: ShippingStatus[] = ['not_shipped', 'label_created', 'in_transit', 'delivered', 'exception']
 
 type PanelMode = 'closed' | 'new' | 'edit'
@@ -213,9 +111,6 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
   const [showImport, setShowImport] = useState(false)
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set())
 
-  const [view, setView] = useState<'grouped' | 'lines'>(
-    () => (localStorage.getItem('cache_orders_view') as 'grouped' | 'lines') || 'grouped'
-  )
   const [statusFilter, setStatusFilter] = useState<Set<OrderStatus>>(new Set())
   const [sort, setSort] = useState<OrderSort>('date_desc')
   // `searchInput` is what's typed (updates instantly); `search` is what the
@@ -233,7 +128,6 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
   // last and repaint the table with results the user already moved past.
   const requestSeq = useRef(0)
   const [savedNotice, setSavedNotice] = useState(false)
-  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(loadColumns)
   const [alerts, setAlerts] = useState<Order[]>([])
 
   async function loadAlerts(): Promise<void> {
@@ -255,22 +149,6 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
     setAlerts([])
   }
 
-  function changeColumns(next: Set<string>): void {
-    // Never let the table become headerless -- an empty selection leaves
-    // nothing but checkboxes and no way to tell the rows apart.
-    if (next.size === 0) return
-    setVisibleColumns(next)
-    localStorage.setItem(COLUMNS_KEY, JSON.stringify([...next]))
-  }
-
-  function resetColumns(): void {
-    setVisibleColumns(new Set(DEFAULT_COLUMNS))
-    localStorage.removeItem(COLUMNS_KEY)
-  }
-
-  // Driven by COLUMNS' own order, not selection order, so toggling a
-  // column back on returns it to its original place in the table.
-  const activeColumns = COLUMNS.filter((c) => visibleColumns.has(c.key))
   // Cleared on unmount so the close-the-panel callback can't fire against
   // a screen that's already gone.
   const savedTimer = useRef<number | undefined>(undefined)
@@ -303,12 +181,6 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
     load()
   }, [statusFilter, sort, search])
 
-  function changeView(next: 'grouped' | 'lines'): void {
-    setView(next)
-    localStorage.setItem('cache_orders_view', next)
-    setCheckedIds(new Set())
-  }
-
   function toggleStatus(status: OrderStatus): void {
     setStatusFilter((prev) => {
       const next = new Set(prev)
@@ -324,7 +196,12 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
     setError(null)
     try {
       const list = await api.orders.list({
-        status: statusFilter.size ? Array.from(statusFilter).join(',') : undefined,
+        // Cancelled orders are failures, so "failed" also matches them.
+        status: statusFilter.size
+          ? Array.from(statusFilter)
+              .flatMap((st) => (st === 'failed' ? ['failed', 'cancelled'] : [st]))
+              .join(',')
+          : undefined,
         search: search.trim() || undefined,
         sort
       })
@@ -364,15 +241,6 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
     setDraft((prev) => ({ ...prev, [key]: value }))
   }
 
-  function toggleChecked(id: string): void {
-    setCheckedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
   /** Checks every id, or unchecks them if they were all already checked --
    * the grouped view's cart, line and header checkboxes all go through this. */
   function toggleLines(ids: string[]): void {
@@ -385,10 +253,6 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
       }
       return next
     })
-  }
-
-  function toggleAllChecked(): void {
-    setCheckedIds((prev) => (prev.size === orders.length ? new Set() : new Set(orders.map((o) => o.id))))
   }
 
   async function save(): Promise<void> {
@@ -508,7 +372,7 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
   if (loading && !hasLoaded) {
     return (
       <>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div className="screen-header">
           <div className="screen-title">Orders</div>
           <Skel style={{ width: 190, height: 34, borderRadius: 9 }} />
         </div>
@@ -538,7 +402,7 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
 
   return (
     <>
-      <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div className="screen-header">
         <div className="screen-title">Orders</div>
         <div style={{ display: 'flex', gap: 10 }}>
           <button className="btn-ghost" onClick={() => setShowImport(true)}>
@@ -598,28 +462,11 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
       >
         <div className="card" style={{ padding: '8px 16px 14px', overflow: 'auto', display: 'flex', flexDirection: 'column', height: '100%' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '10px 0 8px' }}>
-            <div style={{ display: 'flex', gap: 3, background: 'var(--field-bg)', border: '1px solid var(--field-border)', borderRadius: 8, padding: 3 }}>
-              {(['grouped', 'lines'] as const).map((m) => (
-                <button
-                  key={m}
-                  onClick={() => changeView(m)}
-                  style={{
-                    padding: '5px 11px', borderRadius: 6, fontSize: 11.5, fontWeight: 600,
-                    border: 'none', cursor: 'pointer',
-                    background: view === m ? 'var(--accent-gradient)' : 'transparent',
-                    color: view === m ? 'oklch(14% 0.01 255)' : 'var(--text-secondary)'
-                  }}
-                >
-                  {m === 'grouped' ? 'By order' : 'All lines'}
-                </button>
-              ))}
-            </div>
-
-            {ORDER_STATUSES.map((s) => (
+            {FILTER_STATUSES.map((s) => (
               <button
                 key={s}
                 onClick={() => toggleStatus(s)}
-                className={`pill ${statusFilter.has(s) ? `pill-${s === 'success' ? 'success' : s === 'failed' ? 'failed' : 'neutral'}` : 'pill-neutral'}`}
+                className={`pill ${statusFilter.has(s) ? `pill-${s === 'success' ? 'success' : 'failed'}` : 'pill-neutral'}`}
                 style={{
                   cursor: 'pointer', border: 'none',
                   opacity: statusFilter.size === 0 || statusFilter.has(s) ? 1 : 0.4
@@ -652,38 +499,13 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
               <option value="retailer_asc">Retailer A–Z</option>
             </select>
 
-            {/* Only the flat table is column-driven -- the grouped view has
-                its own fixed cart-level layout (see GroupedOrders.tsx). */}
-            {view === 'lines' && (
-              <ColumnPicker
-                options={COLUMNS.map(({ key, label }) => ({ key, label }))}
-                visible={visibleColumns}
-                onChange={changeColumns}
-                onReset={resetColumns}
-              />
-            )}
-
             <span className="num" style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
-              {view === 'grouped'
-                ? `${groupOrders(orders).length} orders`
-                : `${orders.length} lines`}
+              {`${groupOrders(orders).length} orders`}
             </span>
           </div>
 
           {orders.length === 0 ? (
             <>
-              <table style={{ width: '100%', borderCollapse: 'collapse', opacity: 0.4 }}>
-                <thead>
-                  <tr>
-                    <th style={{ paddingTop: 16, width: 32 }} />
-                    {activeColumns.map((col) => (
-                      <th key={col.key} style={{ paddingTop: 16 }}>
-                        {col.label}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-              </table>
               <div style={{ borderTop: '1px solid var(--divider)' }} />
               <EmptyState
                 icon={
@@ -720,7 +542,7 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
                 }
               />
             </>
-          ) : view === 'grouped' ? (
+          ) : (
             <GroupedOrders
               groups={sortGroups(groupOrders(orders), sort)}
               selectedId={selectedId}
@@ -728,43 +550,6 @@ function Orders({ onNavigate }: { onNavigate?: (screen: Screen) => void }): Reac
               checkedIds={checkedIds}
               onToggleLines={toggleLines}
             />
-          ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  <th style={{ paddingTop: 16, width: 32 }}>
-                    <input type="checkbox" checked={checkedIds.size === orders.length} onChange={toggleAllChecked} />
-                  </th>
-                  {activeColumns.map((col) => (
-                    <th key={col.key} style={{ paddingTop: 16 }}>
-                      {col.label}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {orders.map((order) => (
-                  <tr
-                    key={order.id}
-                    className="row"
-                    onClick={() => selectOrder(order)}
-                    style={{
-                      cursor: 'pointer',
-                      background: order.id === selectedId ? 'linear-gradient(90deg, oklch(29% 0.06 215), oklch(27% 0.06 292 / 0.6))' : undefined
-                    }}
-                  >
-                    <td onClick={(e) => e.stopPropagation()}>
-                      <input type="checkbox" checked={checkedIds.has(order.id)} onChange={() => toggleChecked(order.id)} />
-                    </td>
-                    {activeColumns.map((col) => (
-                      <td key={col.key} className={col.cellClass} style={col.cellStyle}>
-                        {col.render(order)}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
           )}
         </div>
 

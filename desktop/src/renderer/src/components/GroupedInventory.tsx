@@ -93,8 +93,10 @@ function GroupedInventory({
           // there is one, otherwise the normalized name -- NOT a shared
           // '__unmatched__' bucket, which would give every unmatched
           // product the same React key AND the same checkbox state.
-          const key = group.product_id ?? (group.name ?? 'unmatched').trim().toLowerCase()
-          const unmatched = group.product_id == null
+          const key = group.family_id
+            ? `family:${group.family_id}`
+            : (group.product_id ?? (group.name ?? 'unmatched').trim().toLowerCase())
+          const unmatched = group.product_id == null && !group.family_id
           return (
             <tr
               key={key}
@@ -154,9 +156,30 @@ function GroupedInventory({
                     {group.name}
                   </span>
                 )}
+                {group.family_id && (
+                  <span
+                    style={{
+                      display: 'inline-block',
+                      whiteSpace: 'nowrap',
+                      marginLeft: 8,
+                      padding: '2px 7px',
+                      borderRadius: 999,
+                      fontSize: 10.5,
+                      fontWeight: 600,
+                      letterSpacing: 0.3,
+                      background: 'var(--status-neutral-bg)',
+                      color: 'var(--text-secondary)'
+                    }}
+                    title="Click in to see each variant"
+                  >
+                    {group.variant_count} variants
+                  </span>
+                )}
                 {unmatched && (
                   <span
                     style={{
+                      display: 'inline-block',
+                      whiteSpace: 'nowrap',
                       marginLeft: 8,
                       padding: '2px 7px',
                       borderRadius: 999,

@@ -1,249 +1,170 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   api,
-  type AgingSummary,
-  type CategoryBreakdown,
+  type BreakdownRow,
+  type DashboardOverview,
   type InventorySummary,
-  type MonthlyPoint,
-  type Order,
-  type RetailerBreakdown
+  type OverviewPeriod
 } from '../api/client'
 import type { Screen } from '../components/NavRail'
 import { Skel, TableSkeleton } from '../components/Skeleton'
 import ErrorState from '../components/ErrorState'
 import ImportWizard from '../components/ImportWizard'
+import OverviewChart, { type ChartMetric } from '../components/OverviewChart'
+import { retailerColor } from '../components/retailerBrand'
 
-type ChartMode = 'spending' | 'sales' | 'both'
-type WidgetView = 'age' | 'retailer' | 'category'
+type BreakdownTab = 'category' | 'channel' | 'product'
 
-const PAD_X = 20
-const PAD_TOP = 14
-const PAD_BOTTOM = 30
-// Only used before the container has been measured, so the first paint has
-// something sane to draw rather than collapsing to zero.
-const FALLBACK_SIZE = { w: 620, h: 180 }
+const PERIODS: { key: OverviewPeriod; label: string; profitLabel: string; spentNote: string; noun: string }[] = [
+  { key: 'weekly', label: 'Weekly', profitLabel: 'Profit · this week so far', spentNote: 'ordered this week', noun: 'this week' },
+  { key: 'monthly', label: 'Monthly', profitLabel: 'Profit · this month so far', spentNote: 'ordered this month', noun: 'this month' },
+  { key: 'all', label: 'All time', profitLabel: 'Total profit · all time', spentNote: 'ordered, all time', noun: 'all time' }
+]
 
-/**
- * The chart's on-screen size in real pixels.
- *
- * WHY MEASURE instead of a fixed viewBox: the SVG previously used a
- * 620x180 viewBox with preserveAspectRatio="none", which stretches the x
- * and y axes by DIFFERENT factors to fill the container. That distorts
- * every shape drawn in it -- circles rendered as tall ellipses, and stroke
- * widths that varied with line direction. Matching the viewBox to the
- * element's actual pixel size means the scale factor is exactly 1 on both
- * axes, so a circle is a circle.
- */
-function useChartSize(): [React.RefObject<HTMLDivElement | null>, { w: number; h: number }] {
-  const ref = useRef<HTMLDivElement | null>(null)
-  const [size, setSize] = useState(FALLBACK_SIZE)
-
-  useLayoutEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const observer = new ResizeObserver(([entry]) => {
-      const { width, height } = entry.contentRect
-      if (width > 0 && height > 0) setSize({ w: width, h: height })
-    })
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [])
-
-  return [ref, size]
+const STAGE_STYLE: Record<string, { label: string; color: string }> = {
+  in_hand: { label: 'In hand', color: 'var(--status-success)' },
+  in_transit: { label: 'In transit', color: 'var(--accent-cyan)' },
+  not_shipped: { label: 'Order placed', color: 'var(--text-faint)' }
 }
 
-/** Maps a series of numbers into the chart's pixel space, scaling to that
- * series' own max (or a shared max, when passed in) so a single-value
- * chart doesn't render as a flat line pinned to the top or bottom. */
-function toPoints(
-  values: number[],
-  size: { w: number; h: number },
-  sharedMax?: number
-): { x: number; y: number }[] {
-  const max = sharedMax ?? Math.max(...values, 1)
-  const n = values.length
-  const step = n > 1 ? (size.w - PAD_X * 2) / (n - 1) : 0
-  const baseline = size.h - PAD_BOTTOM
-  return values.map((v, i) => ({
-    x: PAD_X + step * i,
-    y: baseline - (max > 0 ? (v / max) * (baseline - PAD_TOP) : 0)
-  }))
+function usd(n: number): string {
+  return `${n < 0 ? '-' : ''}$${Math.abs(Math.round(n)).toLocaleString()}`
 }
 
-function pointsToPath(points: { x: number; y: number }[]): string {
-  return points.map((p) => `${p.x},${p.y}`).join(' ')
+function signedUsd(n: number): string {
+  return `${n < 0 ? '-' : '+'}${usd(Math.abs(n))}`
 }
 
-function monthLabel(month: string): string {
-  const [, m] = month.split('-')
-  const names = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
-  return names[parseInt(m, 10) - 1] ?? month
-}
-
-function currency(n: number): string {
-  return `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-}
-
-/** Currency with an explicit + for gains, so a profit figure reads as a
- * change rather than just a total. */
-function signedCurrency(n: number): string {
-  return `${n >= 0 ? '+' : '−'}${currency(Math.abs(n))}`
-}
-
-function percent(fraction: number): string {
+function pct(fraction: number): string {
   return `${Math.round(fraction * 100)}%`
 }
 
-function signedPercent(fraction: number): string {
-  return `${fraction >= 0 ? '+' : '−'}${Math.round(Math.abs(fraction) * 100)}%`
+function Segmented<T extends string>({
+  options,
+  value,
+  onChange
+}: {
+  options: { key: T; label: string }[]
+  value: T
+  onChange: (next: T) => void
+}): React.JSX.Element {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        gap: 3,
+        background: 'var(--field-bg)',
+        border: '1px solid var(--field-border)',
+        borderRadius: 8,
+        padding: 3
+      }}
+    >
+      {options.map((o) => (
+        <button
+          key={o.key}
+          onClick={() => onChange(o.key)}
+          style={{
+            padding: '5px 11px',
+            borderRadius: 6,
+            fontSize: 11.5,
+            fontWeight: 600,
+            border: 'none',
+            cursor: 'pointer',
+            background: value === o.key ? 'var(--accent-gradient)' : 'transparent',
+            color: value === o.key ? 'oklch(14% 0.01 255)' : 'var(--text-secondary)'
+          }}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function Tile({
+  label,
+  value,
+  sub,
+  color,
+  hero
+}: {
+  label: string
+  value: string
+  sub?: string
+  color?: string
+  hero?: boolean
+}): React.JSX.Element {
+  return (
+    <div className="card" style={{ padding: '16px 18px' }}>
+      <div className="field-label">{label}</div>
+      <div className="num" style={{ fontSize: hero ? 32 : 22, fontWeight: 500, marginTop: 6, color }}>
+        {value}
+      </div>
+      {sub && <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 5 }}>{sub}</div>}
+    </div>
+  )
 }
 
 function Dashboard({ onNavigate }: { onNavigate?: (screen: Screen) => void }): React.JSX.Element {
   const [summary, setSummary] = useState<InventorySummary | null>(null)
-  const [monthly, setMonthly] = useState<MonthlyPoint[]>([])
-  const [aging, setAging] = useState<AgingSummary | null>(null)
-  const [byRetailer, setByRetailer] = useState<RetailerBreakdown[]>([])
-  const [byCategory, setByCategory] = useState<CategoryBreakdown[]>([])
-  const [failedOrders, setFailedOrders] = useState<Order[]>([])
+  const [overview, setOverview] = useState<DashboardOverview | null>(null)
+  const [period, setPeriod] = useState<OverviewPeriod>('all')
+  const [metric, setMetric] = useState<ChartMetric>('spent-revenue')
+  const [tab, setTab] = useState<BreakdownTab>('category')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [chartMode, setChartMode] = useState<ChartMode>('spending')
-  const [widgetView, setWidgetView] = useState<WidgetView>('age')
   const [showImport, setShowImport] = useState(false)
-  const [chartRef, chartSize] = useChartSize()
+  const requestId = useRef(0)
 
-  useEffect(() => {
-    load()
-  }, [])
-
-  async function load(): Promise<void> {
-    setLoading(true)
-    setError(null)
+  // The first load shows the skeleton; changing the period just swaps the
+  // numbers in place, so the screen (and the buttons you're clicking) never
+  // unmount underneath you.
+  async function fetchOverview(next: OverviewPeriod): Promise<void> {
+    const id = ++requestId.current
     try {
-      const [s, m, a, r, c, orders] = await Promise.all([
-        api.inventory.summary(),
-        api.dashboard.monthly(6),
-        api.dashboard.aging(),
-        api.dashboard.byRetailer(),
-        api.dashboard.byCategory(),
-        api.orders.list({ status: 'failed', limit: 5 })
-      ])
+      const [s, o] = await Promise.all([api.inventory.summary(), api.dashboard.overview(next)])
+      if (id !== requestId.current) return
+      setError(null)
       setSummary(s)
-      setMonthly(m)
-      setAging(a)
-      setByRetailer(r)
-      setByCategory(c)
-      setFailedOrders(orders)
+      setOverview(o)
     } catch (err) {
+      if (id !== requestId.current) return
       setError(err instanceof Error ? err.message : 'Failed to load dashboard')
     } finally {
-      setLoading(false)
+      if (id === requestId.current) setLoading(false)
     }
   }
 
-  const spendPoints = useMemo(() => toPoints(monthly.map((m) => m.spend), chartSize), [monthly, chartSize])
-  const revenuePoints = useMemo(() => toPoints(monthly.map((m) => m.revenue), chartSize), [monthly, chartSize])
-  const sharedMax = useMemo(
-    () => Math.max(...monthly.map((m) => m.spend), ...monthly.map((m) => m.revenue), 1),
-    [monthly]
-  )
-  const bothSpendPoints = useMemo(() => toPoints(monthly.map((m) => m.spend), chartSize, sharedMax), [monthly, chartSize, sharedMax])
-  const bothRevenuePoints = useMemo(() => toPoints(monthly.map((m) => m.revenue), chartSize, sharedMax), [monthly, chartSize, sharedMax])
-  const baseline = chartSize.h - PAD_BOTTOM
+  function reload(): void {
+    setLoading(true)
+    fetchOverview(period)
+  }
 
-  const totalSpend6mo = monthly.reduce((sum, m) => sum + m.spend, 0)
-  const totalRevenue6mo = monthly.reduce((sum, m) => sum + m.revenue, 0)
-  const currentMonth = monthly[monthly.length - 1]
+  function changePeriod(next: OverviewPeriod): void {
+    setPeriod(next)
+    fetchOverview(next)
+  }
+
+  // The screen starts out in its loading state, so the first fetch doesn't
+  // need to switch it on again.
+  useEffect(() => {
+    // Fetching on mount is the point of this effect; the state updates happen
+    // after the request returns, not during the render.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchOverview('all')
+  }, [])
 
   if (loading) return <DashboardLoading />
-  if (error) return <ErrorState screenTitle="Dashboard" message={error} onRetry={load} />
+  if (error) return <ErrorState screenTitle="Dashboard" message={error} onRetry={reload} />
 
   const isFirstRun = (summary?.order_count ?? 0) === 0
-
-  // "Held" here means "yours, one way or another" -- in hand, or still on
-  // the way. Matches crud.SHIPPABLE_ITEM_STATUSES on the backend, which is
-  // exactly what est_inventory_value below is already computed over.
-  const unitsHeld = (summary?.not_shipped ?? 0) + (summary?.in_transit ?? 0) + (summary?.in_hand ?? 0)
-  const soldCount = summary?.sold_priced_count ?? 0
-  const avgCostPerUnitHeld = unitsHeld > 0 ? (summary?.est_inventory_value ?? 0) / unitsHeld : 0
-  const avgSalePrice = soldCount > 0 ? (summary?.sold_revenue ?? 0) / soldCount : 0
-  const avgProfitPerUnit = soldCount > 0 ? (summary?.realized_profit ?? 0) / soldCount : 0
-  // ROI against what those sold units actually cost -- the resale return,
-  // not a margin on revenue.
-  const avgRoi = (summary?.sold_cost_basis ?? 0) > 0 ? (summary?.realized_profit ?? 0) / (summary?.sold_cost_basis ?? 1) : 0
-  // Of everything you've ever acquired (still held + already sold), how
-  // much has actually moved.
-  const sellThrough =
-    unitsHeld + (summary?.sold ?? 0) > 0 ? (summary?.sold ?? 0) / (unitsHeld + (summary?.sold ?? 0)) : 0
+  const meta = PERIODS.find((p) => p.key === period)!
 
   return (
     <>
-      <div style={{ position: 'relative', display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+      <div className="screen-header">
         <div className="screen-title">Dashboard</div>
-        <div className="num" style={{ fontSize: 12, color: 'var(--text-faint)' }}>
-          {new Date().toISOString().slice(0, 10)}
-        </div>
-      </div>
-
-      <div
-        style={{
-          position: 'relative',
-          display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
-          gap: 14,
-          opacity: isFirstRun ? 0.42 : 1
-        }}
-      >
-        <SummaryPanel
-          label="Inventory"
-          headline={isFirstRun ? '—' : currency(summary?.est_inventory_value ?? 0)}
-          headlineAccent={!isFirstRun}
-          caption={
-            isFirstRun
-              ? 'nothing on hand yet'
-              : `${summary?.in_hand ?? 0} in hand · ${summary?.in_transit ?? 0} in transit · ${summary?.not_shipped ?? 0} not shipped`
-          }
-          stats={
-            isFirstRun
-              ? []
-              : [
-                  { label: 'Total spent', value: currency(summary?.total_cost_basis ?? 0), sub: `${summary?.order_count ?? 0} orders` },
-                  { label: 'Avg cost / unit', value: currency(avgCostPerUnitHeld) },
-                  {
-                    label: 'Aging 60d+',
-                    value: currency(aging?.value_tied_up_60d_plus ?? 0),
-                    sub: `${aging?.buckets[3]?.count ?? 0} unit${(aging?.buckets[3]?.count ?? 0) === 1 ? '' : 's'}`,
-                    warn: (aging?.buckets[3]?.count ?? 0) > 0
-                  }
-                ]
-          }
-        />
-        <SummaryPanel
-          label="Sales · all time"
-          headline={isFirstRun ? '—' : signedCurrency(summary?.realized_profit ?? 0)}
-          headlineColor={
-            isFirstRun
-              ? undefined
-              : (summary?.realized_profit ?? 0) >= 0
-                ? 'var(--status-success)'
-                : 'var(--status-failed)'
-          }
-          caption={
-            isFirstRun || (summary?.sold_priced_count ?? 0) === 0
-              ? 'no sales yet'
-              : `avg ROI ${signedPercent(avgRoi)} · ${summary?.sold_priced_count ?? 0} units sold`
-          }
-          stats={
-            isFirstRun || (summary?.sold_priced_count ?? 0) === 0
-              ? []
-              : [
-                  { label: 'Revenue', value: currency(summary?.sold_revenue ?? 0) },
-                  { label: 'Avg sale', value: currency(avgSalePrice) },
-                  { label: 'Avg profit / unit', value: signedCurrency(avgProfitPerUnit) },
-                  { label: 'Sell-through', value: percent(sellThrough), sub: 'of all units' }
-                ]
-          }
-        />
+        {!isFirstRun && <Segmented options={PERIODS} value={period} onChange={changePeriod} />}
       </div>
 
       {isFirstRun ? (
@@ -319,373 +240,210 @@ function Dashboard({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
               </div>
             </div>
           </div>
-          {showImport && <ImportWizard onClose={() => setShowImport(false)} onImported={load} />}
+          {showImport && <ImportWizard onClose={() => setShowImport(false)} onImported={reload} />}
         </>
-      ) : (
-      <div style={{ position: 'relative', flex: 1, display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 16, minHeight: 0 }}>
-        {/* Chart */}
-        <div className="card" style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 18 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ fontSize: 13.5, fontWeight: 600 }}>
-              {chartMode === 'spending' ? 'Spending by month' : chartMode === 'sales' ? 'Sales by month' : 'Spending vs. sales'}
-            </div>
-            <div style={{ display: 'flex', gap: 4, background: 'var(--field-bg)', border: '1px solid var(--field-border)', borderRadius: 8, padding: 3 }}>
-              {(['spending', 'sales', 'both'] as ChartMode[]).map((mode) => (
-                <button
-                  key={mode}
-                  onClick={() => setChartMode(mode)}
-                  style={{
-                    padding: '5px 13px',
-                    borderRadius: 6,
-                    fontSize: 11.5,
-                    fontWeight: 600,
-                    border: 'none',
-                    cursor: 'pointer',
-                    background: chartMode === mode ? 'var(--accent-gradient)' : 'transparent',
-                    color: chartMode === mode ? 'oklch(14% 0.01 255)' : 'var(--text-secondary)'
-                  }}
-                >
-                  {mode === 'spending' ? 'Spending' : mode === 'sales' ? 'Sales' : 'Both'}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {chartMode !== 'both' && currentMonth && (
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
-              <div className="num" style={{ fontSize: 28, fontWeight: 700 }}>
-                {currency(chartMode === 'spending' ? currentMonth.spend : currentMonth.revenue)}
-              </div>
-              <div className="num" style={{ fontSize: 12, color: 'var(--text-faint)', marginLeft: 'auto' }}>
-                6-mo total {currency(chartMode === 'spending' ? totalSpend6mo : totalRevenue6mo)}
-              </div>
-            </div>
-          )}
-          {chartMode === 'both' && (
-            <div style={{ display: 'flex', gap: 14 }}>
-              <Legend color="var(--accent-cyan)" label="Spending" />
-              <Legend color="var(--status-success)" label="Sales" />
-            </div>
-          )}
-
-          {monthly.length === 0 ? (
-            <EmptyChart />
-          ) : (
-            <>
-              <div ref={chartRef} style={{ flex: 1, minHeight: 0, width: '100%' }}>
-                <svg
-                  width={chartSize.w}
-                  height={chartSize.h}
-                  viewBox={`0 0 ${chartSize.w} ${chartSize.h}`}
-                  style={{ display: 'block' }}
-                >
-                  <line x1={PAD_X} y1={baseline} x2={chartSize.w - PAD_X} y2={baseline} stroke="var(--divider)" strokeWidth="1" />
-                  {chartMode !== 'both' ? (
-                    <ChartLine points={chartMode === 'spending' ? spendPoints : revenuePoints} baseline={baseline} color={chartMode === 'spending' ? 'var(--accent-cyan)' : 'var(--status-success)'} />
-                  ) : (
-                    <>
-                      <ChartLine points={bothSpendPoints} baseline={baseline} color="var(--accent-cyan)" />
-                      <ChartLine points={bothRevenuePoints} baseline={baseline} color="var(--status-success)" />
-                    </>
-                  )}
-                </svg>
-              </div>
-              <div style={{ display: 'flex', padding: '0 20px' }}>
-                {monthly.map((m) => (
-                  <span key={m.month} className="num" style={{ fontSize: 10.5, color: 'var(--text-faint)', flex: 1, textAlign: 'center' }}>
-                    {monthLabel(m.month)}
-                  </span>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* Right column: aging/retailer/category widget + needs attention */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minHeight: 0 }}>
-          <div className="card" style={{ padding: '18px 22px', display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0, overflow: 'hidden' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={{ fontSize: 13.5, fontWeight: 600 }}>How long you&rsquo;ve held it</div>
-              <select className="select" style={{ width: 140 }} value={widgetView} onChange={(e) => setWidgetView(e.target.value as WidgetView)}>
-                <option value="age">Inventory age</option>
-                <option value="retailer">By retailer</option>
-                <option value="category">By category</option>
-              </select>
-            </div>
-            {widgetView === 'age' && aging && <AgingView aging={aging} />}
-            {widgetView === 'retailer' && <RetailerView rows={byRetailer} />}
-            {widgetView === 'category' && <CategoryView rows={byCategory} />}
-          </div>
-
-          <div className="card" style={{ padding: '18px 22px', display: 'flex', flexDirection: 'column', gap: 10, flex: 0.85, minHeight: 0, overflow: 'hidden' }}>
-            <div style={{ fontSize: 13.5, fontWeight: 600 }}>Needs attention</div>
-            {failedOrders.length === 0 && (aging?.buckets[3].count ?? 0) === 0 ? (
-              <div style={{ fontSize: 12.5, color: 'var(--text-faint)', margin: 'auto 0' }}>Nothing needs attention right now.</div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                {failedOrders.length > 0 && (
-                  <AttentionRow color="var(--status-failed)" text={`${failedOrders.length} order${failedOrders.length === 1 ? '' : 's'} failed — needs review`} />
-                )}
-                {(aging?.buckets[3].count ?? 0) > 0 && (
-                  <AttentionRow
-                    color="var(--status-warn)"
-                    text={`${aging!.buckets[3].count} unit${aging!.buckets[3].count === 1 ? '' : 's'} held 60+ days (${currency(aging!.value_tied_up_60d_plus)} tied up)`}
-                  />
-                )}
-              </div>
-            )}
+      ) : overview ? (
+        <div style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 14, paddingBottom: 6 }}>
+          <Kpis overview={overview} meta={meta} />
+          <ChartCard overview={overview} metric={metric} onMetric={setMetric} />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 14 }}>
+            <BreakdownCard overview={overview} tab={tab} onTab={setTab} />
+            <InventoryCard overview={overview} />
           </div>
         </div>
-      </div>
-      )}
+      ) : null}
     </>
   )
 }
 
-interface PanelStat {
-  label: string
-  value: string
-  sub?: string
-  warn?: boolean
+function Kpis({
+  overview,
+  meta
+}: {
+  overview: DashboardOverview
+  meta: (typeof PERIODS)[number]
+}): React.JSX.Element {
+  const k = overview.kpis
+  const parts = [`${k.units_sold} unit${k.units_sold === 1 ? '' : 's'} sold`]
+  if (k.roi != null) parts.push(`ROI ${k.roi >= 0 ? '+' : '-'}${pct(Math.abs(k.roi))}`)
+  if (k.margin != null) parts.push(`margin ${pct(k.margin)}`)
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.5fr) repeat(3, minmax(0, 1fr))', gap: 14 }}>
+      <Tile
+        hero
+        label={meta.profitLabel}
+        value={signedUsd(k.profit)}
+        color={k.profit >= 0 ? 'var(--status-success)' : 'var(--status-failed)'}
+        sub={parts.join(' · ')}
+      />
+      <Tile label="Revenue" value={usd(k.revenue)} sub={`${k.units_sold} unit${k.units_sold === 1 ? '' : 's'} sold`} />
+      <Tile label="Spent" value={usd(k.spent)} sub={meta.spentNote} />
+      <Tile label="Unsold inventory" value={usd(overview.inventory.cost)} sub={`${overview.inventory.units} units, at cost`} />
+    </div>
+  )
 }
 
-/**
- * One of the two headline cards at the top of the Dashboard: a big
- * primary figure with a caption, then a row of smaller supporting stats.
- * Replaces the old five one-number KpiCards -- the same information, but
- * grouped so "what I'm holding" and "what I've realized" each read as a
- * single thought instead of five loose tiles.
- */
-function SummaryPanel({
-  label,
-  headline,
-  caption,
-  stats,
-  headlineAccent,
-  headlineColor
+function ChartCard({
+  overview,
+  metric,
+  onMetric
 }: {
-  label: string
-  headline: string
-  caption: string
-  stats: PanelStat[]
-  headlineAccent?: boolean
-  headlineColor?: string
+  overview: DashboardOverview
+  metric: ChartMetric
+  onMetric: (m: ChartMetric) => void
 }): React.JSX.Element {
+  const unit = overview.chart.granularity === 'week' ? 'week' : 'month'
+  const swatch = (color: string): React.JSX.Element => (
+    <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 2, marginRight: 6, background: color }} />
+  )
   return (
-    <div className="card" style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <div className="label">{label}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-        <div
-          className="num"
-          style={{
-            fontSize: 26,
-            fontWeight: 700,
-            color: headlineColor ?? 'var(--text-primary)',
-            ...(headlineAccent
-              ? {
-                  background: 'linear-gradient(120deg, oklch(85% 0.1 205), oklch(76% 0.15 292))',
-                  WebkitBackgroundClip: 'text',
-                  backgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent'
-                }
-              : {})
-          }}
-        >
-          {headline}
+    <div className="card" style={{ padding: '18px 22px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 13.5, fontWeight: 600 }}>
+          {metric === 'profit' ? `Profit by ${unit}` : `Spent vs. revenue by ${unit}`}
         </div>
-        <div className="num" style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
-          {caption}
-        </div>
+        <Segmented
+          options={[
+            { key: 'spent-revenue' as ChartMetric, label: 'Spent vs. revenue' },
+            { key: 'profit' as ChartMetric, label: 'Profit' }
+          ]}
+          value={metric}
+          onChange={onMetric}
+        />
       </div>
-      {stats.length > 0 && (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: `repeat(${stats.length}, minmax(0, 1fr))`,
-            gap: 10,
-            borderTop: '1px solid var(--divider)',
-            paddingTop: 12
-          }}
-        >
-          {stats.map((s) => (
-            <div key={s.label} style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
-              <div className="num" style={{ fontSize: 10.5, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: 0.3 }}>
-                {s.label}
+      <div style={{ display: 'flex', gap: 16, fontSize: 12, color: 'var(--text-secondary)', margin: '10px 0 6px', flexWrap: 'wrap' }}>
+        {metric === 'profit' ? (
+          <span>{swatch('var(--status-success)')}Profit (sale price minus average cost)</span>
+        ) : (
+          <>
+            <span>{swatch('var(--accent-cyan)')}Spent (purchases)</span>
+            <span>{swatch('var(--status-success)')}Revenue (sales)</span>
+          </>
+        )}
+      </div>
+      <OverviewChart buckets={overview.chart.buckets} metric={metric} />
+      <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 4 }}>
+        * This {unit} is still in progress. Spent counts purchases by the day they were ordered; revenue and profit count
+        units by the day you sold them.
+      </div>
+    </div>
+  )
+}
+
+const TABS: { key: BreakdownTab; label: string }[] = [
+  { key: 'category', label: 'Category' },
+  { key: 'channel', label: 'Sales channel' },
+  { key: 'product', label: 'Product' }
+]
+
+function BreakdownCard({
+  overview,
+  tab,
+  onTab
+}: {
+  overview: DashboardOverview
+  tab: BreakdownTab
+  onTab: (t: BreakdownTab) => void
+}): React.JSX.Element {
+  const rows: BreakdownRow[] = overview.breakdown[tab]
+  const max = Math.max(1, ...rows.map((r) => r.profit))
+  const cols = 'minmax(150px, 2.4fr) minmax(50px, 1fr) 84px 44px 52px'
+  return (
+    <div className="card" style={{ padding: '18px 22px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 600 }}>Profit breakdown</div>
+        <Segmented options={TABS} value={tab} onChange={onTab} />
+      </div>
+      {rows.length === 0 ? (
+        <div style={{ fontSize: 12.5, color: 'var(--text-faint)', padding: '14px 0' }}>No sales in this period yet.</div>
+      ) : (
+        <>
+          <div className="field-label" style={{ display: 'grid', gridTemplateColumns: cols, gap: 10, paddingBottom: 6 }}>
+            <span>{TABS.find((t) => t.key === tab)?.label}</span>
+            <span />
+            <span style={{ textAlign: 'right' }}>Profit</span>
+            <span style={{ textAlign: 'right' }}>Units</span>
+            <span style={{ textAlign: 'right' }}>ROI</span>
+          </div>
+          {rows.map((r) => (
+            <div
+              key={r.name}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: cols,
+                gap: 10,
+                alignItems: 'center',
+                padding: '8px 0',
+                borderTop: '1px solid var(--divider)',
+                fontSize: 12.5
+              }}
+            >
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.name}>
+                {tab === 'product' ? r.name.replace(/^Pokémon (TCG|Trading Card Game): /, '') : r.name}
+              </span>
+              <div style={{ height: 8, background: 'var(--field-bg)', borderRadius: 4, overflow: 'hidden' }}>
+                <div
+                  style={{
+                    height: '100%',
+                    width: `${Math.max(0, (r.profit / max) * 100)}%`,
+                    background: r.profit < 0 ? 'var(--status-failed)' : 'var(--status-success)',
+                    borderRadius: 4
+                  }}
+                />
               </div>
-              <div
-                className="num"
-                style={{ fontSize: 13.5, fontWeight: 600, color: s.warn ? 'var(--status-warn)' : 'var(--text-primary)', whiteSpace: 'nowrap' }}
-              >
-                {s.value}
-              </div>
-              {s.sub && (
-                <div className="num" style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>
-                  {s.sub}
-                </div>
-              )}
+              <span className="num" style={{ textAlign: 'right', color: r.profit < 0 ? 'var(--status-failed)' : 'var(--status-success)' }}>
+                {signedUsd(r.profit)}
+              </span>
+              <span className="num" style={{ textAlign: 'right' }}>{r.units}</span>
+              <span className="num" style={{ textAlign: 'right' }}>{r.cost > 0 ? pct(r.profit / r.cost) : '—'}</span>
             </div>
           ))}
-        </div>
+        </>
       )}
     </div>
   )
 }
 
-function ChartLine({
-  points,
-  baseline,
-  color
-}: {
-  points: { x: number; y: number }[]
-  baseline: number
-  color: string
-}): React.JSX.Element {
-  if (points.length === 0) return <></>
-  const path = pointsToPath(points)
-  const areaPath = `${path} ${points[points.length - 1].x},${baseline} ${points[0].x},${baseline}`
-  const gradId = `grad-${color.replace(/[^a-z]/gi, '')}`
+function InventoryCard({ overview }: { overview: DashboardOverview }): React.JSX.Element {
+  const inv = overview.inventory
+  const spend = overview.spend_by_retailer
+  const shown = spend.slice(0, 4)
+  const rest = spend.slice(4).reduce((t, r) => t + r.spent, 0)
+  const lines = rest > 0 ? [...shown, { name: 'All other retailers', spent: rest }] : shown
+  const maxSpend = Math.max(1, ...lines.map((l) => l.spent))
   return (
-    <>
-      <defs>
-        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={color} stopOpacity="0.28" />
-          <stop offset="100%" stopColor={color} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <polygon points={areaPath} fill={`url(#${gradId})`} />
-      <polyline points={path} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-      {points.map((p, i) => (
-        <circle
-          key={i}
-          cx={p.x}
-          cy={p.y}
-          r={i === points.length - 1 ? 5 : 3.5}
-          fill={i === points.length - 1 ? color : 'var(--card-bg)'}
-          stroke={color}
-          strokeWidth="2"
-        />
-      ))}
-    </>
-  )
-}
-
-function Legend({ color, label }: { color: string; label: string }): React.JSX.Element {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-      <span style={{ width: 14, height: 2.5, borderRadius: 2, background: color, display: 'inline-block' }} />
-      <span className="num" style={{ fontSize: 11, color: 'var(--text-faint)' }}>
-        {label}
-      </span>
-    </div>
-  )
-}
-
-function AgingView({ aging }: { aging: AgingSummary }): React.JSX.Element {
-  const gradients = [
-    ['oklch(60% 0.13 150)', 'oklch(74% 0.17 150)'],
-    ['oklch(58% 0.1 215)', 'oklch(78% 0.12 215)'],
-    ['oklch(62% 0.11 85)', 'oklch(80% 0.15 85)'],
-    ['oklch(55% 0.14 25)', 'oklch(74% 0.19 25)']
-  ]
-  const maxCount = Math.max(...aging.buckets.map((b) => b.count), 1)
-  return (
-    <>
-      <div className="num" style={{ fontSize: 11, color: 'var(--text-faint)' }}>
-        {aging.buckets.reduce((s, b) => s + b.count, 0)} units unsold
-      </div>
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly' }}>
-        {aging.buckets.map((bucket, i) => (
-          <div key={bucket.label} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span className="num" style={{ fontSize: 10.5, color: i === 3 ? 'var(--status-failed)' : 'var(--text-faint)', width: 52, flexShrink: 0 }}>
-              {bucket.label}
-            </span>
-            <div style={{ flex: 1, height: 20, background: 'oklch(15% 0.012 255 / 0.55)', borderRadius: 5, overflow: 'hidden' }}>
-              <div
-                style={{
-                  width: `${(bucket.count / maxCount) * 100}%`,
-                  height: '100%',
-                  background: `linear-gradient(90deg, ${gradients[i][0]}, ${gradients[i][1]})`
-                }}
-              />
-            </div>
-            <span className="num" style={{ fontSize: 12, fontWeight: 600, width: 16, textAlign: 'right' }}>
-              {bucket.count}
-            </span>
-          </div>
+    <div className="card" style={{ padding: '18px 22px' }}>
+      <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 10 }}>Inventory and spending</div>
+      <div className="field-label">Unsold units, at cost</div>
+      <div className="num" style={{ fontSize: 24, fontWeight: 500, marginTop: 4 }}>{usd(inv.cost)}</div>
+      <div style={{ display: 'flex', height: 12, borderRadius: 6, overflow: 'hidden', background: 'var(--field-bg)', margin: '10px 0 8px' }}>
+        {inv.stages.map((s) => (
+          <div key={s.stage} style={{ width: `${inv.cost > 0 ? (s.cost / inv.cost) * 100 : 0}%`, background: STAGE_STYLE[s.stage]?.color }} />
         ))}
       </div>
-      <div style={{ paddingTop: 11, borderTop: '1px solid var(--divider)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>{currency(aging.value_tied_up_60d_plus)} tied up past 60 days</span>
+      {inv.stages.map((s) => (
+        <div key={s.stage} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, padding: '5px 0' }}>
+          <span>
+            <span style={{ color: STAGE_STYLE[s.stage]?.color }}>&#9632;</span> {STAGE_STYLE[s.stage]?.label} · {s.units} units
+          </span>
+          <span className="num">{usd(s.cost)}</span>
+        </div>
+      ))}
+      <div className="field-label" style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--divider)' }}>
+        Spent by retailer · all time
       </div>
-    </>
-  )
-}
-
-const RETAILER_COLORS = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181']
-
-function RetailerView({ rows }: { rows: RetailerBreakdown[] }): React.JSX.Element {
-  if (rows.length === 0) return <EmptyMini text="No orders yet." />
-  const max = Math.max(...rows.map((r) => r.order_count), 1)
-  return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly' }}>
-      {rows.slice(0, 5).map((row, i) => (
-        <div key={row.site} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontSize: 10.5, color: 'var(--text-secondary)', width: 100, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {row.site}
-          </span>
-          <div style={{ flex: 1, height: 18, background: 'oklch(15% 0.012 255 / 0.55)', borderRadius: 5, overflow: 'hidden' }}>
-            <div style={{ width: `${(row.order_count / max) * 100}%`, height: '100%', background: RETAILER_COLORS[i % RETAILER_COLORS.length] }} />
+      {lines.map((l) => {
+        const color = retailerColor(l.name) ?? 'var(--text-secondary)'
+        return (
+          <div key={l.name} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 0', fontSize: 12.5 }}>
+            <span style={{ minWidth: 150, color }}>{l.name}</span>
+            <div style={{ flex: 1, height: 8, background: 'var(--field-bg)', borderRadius: 4, overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${(l.spent / maxSpend) * 100}%`, background: color, borderRadius: 4 }} />
+            </div>
+            <span className="num">{usd(l.spent)}</span>
           </div>
-          <span className="num" style={{ fontSize: 12, fontWeight: 600, width: 14, textAlign: 'right' }}>
-            {row.order_count}
-          </span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function CategoryView({ rows }: { rows: CategoryBreakdown[] }): React.JSX.Element {
-  if (rows.length === 0) return <EmptyMini text="No categorized orders yet." />
-  const max = Math.max(...rows.map((r) => r.unit_count), 1)
-  return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly' }}>
-      {rows.map((row, i) => (
-        <div key={row.category} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontSize: 11, color: 'var(--text-secondary)', width: 100, flexShrink: 0 }}>{row.category}</span>
-          <div style={{ flex: 1, height: 22, background: 'oklch(15% 0.012 255 / 0.55)', borderRadius: 5, overflow: 'hidden' }}>
-            <div style={{ width: `${(row.unit_count / max) * 100}%`, height: '100%', background: i % 2 === 0 ? 'var(--accent-cyan)' : 'var(--accent-violet)' }} />
-          </div>
-          <span className="num" style={{ fontSize: 12, fontWeight: 600, width: 20, textAlign: 'right' }}>
-            {row.unit_count}
-          </span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function AttentionRow({ color, text }: { color: string; text: string }): React.JSX.Element {
-  return (
-    <div className="row" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 8px', margin: '0 -8px', borderRadius: 8 }}>
-      <span style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0 }} />
-      <span style={{ fontSize: 12.5 }}>{text}</span>
-    </div>
-  )
-}
-
-function EmptyChart(): React.JSX.Element {
-  return (
-    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-faint)', fontSize: 13 }}>
-      No orders yet — nothing to chart.
-    </div>
-  )
-}
-
-function EmptyMini({ text }: { text: string }): React.JSX.Element {
-  return (
-    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
-      {text}
+        )
+      })}
     </div>
   )
 }
@@ -736,7 +494,7 @@ function StartRow({
 function DashboardLoading(): React.JSX.Element {
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+      <div className="screen-header">
         <div className="screen-title">Dashboard</div>
         <Skel style={{ width: 74, height: 12 }} />
       </div>

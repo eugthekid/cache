@@ -85,6 +85,9 @@ export function sortGroups(groups: OrderGroup[], sort: string): OrderGroup[] {
   })
 }
 
+/** Every column after Product is centered and given room to breathe. */
+const CELL: React.CSSProperties = { textAlign: 'center', padding: '11px 12px', whiteSpace: 'nowrap' }
+
 function money(n: number | null | undefined): string {
   if (n == null) return '—'
   return `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -152,13 +155,12 @@ function GroupedOrders({
             <GroupCheckbox ids={allIds} checkedIds={checkedIds} onToggleLines={onToggleLines} />
           </th>
           <th style={{ paddingTop: 16, width: 26 }} />
-          <th style={{ paddingTop: 16 }}>Product</th>
-          <th style={{ paddingTop: 16 }}>Order #</th>
-          <th style={{ paddingTop: 16 }}>Retailer</th>
-          <th style={{ paddingTop: 16 }}>Profile</th>
-          <th style={{ paddingTop: 16, textAlign: 'right' }}>Total</th>
-          <th style={{ paddingTop: 16, textAlign: 'right' }}>Items</th>
-          <th style={{ paddingTop: 16 }}>Status</th>
+          <th style={{ paddingTop: 16, minWidth: 230 }}>Product</th>
+          {['Order #', 'Retailer', 'Profile', 'Total', 'Items', 'Status', 'Shipping'].map((h) => (
+            <th key={h} style={{ paddingTop: 16, ...CELL }}>
+              {h}
+            </th>
+          ))}
         </tr>
       </thead>
       <tbody>
@@ -198,19 +200,28 @@ function GroupedOrders({
                   {head.purchased_at ? new Date(head.purchased_at).toLocaleDateString() : 'no date'}
                 </div>
               </td>
-              <td className="num" style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>
+              <td className="num" style={{ fontSize: 12.5, color: 'var(--text-secondary)', ...CELL }}>
                 {group.orderNumber ?? 'N/A'}
               </td>
-              <td style={{ color: 'var(--text-secondary)', fontSize: 12.5 }}>{head.retailer ?? '—'}</td>
-              <td style={{ color: 'var(--text-secondary)', fontSize: 12.5 }}>{head.profile ?? '—'}</td>
-              <td className="num" style={{ textAlign: 'right', fontWeight: isMulti ? 600 : 400 }}>
+              <td style={{ color: 'var(--text-secondary)', fontSize: 12.5, ...CELL }}>{head.retailer ?? '—'}</td>
+              <td style={{ color: 'var(--text-secondary)', fontSize: 12.5, ...CELL }}>{head.profile ?? '—'}</td>
+              <td className="num" style={{ fontWeight: isMulti ? 600 : 400, ...CELL }}>
                 {group.hasPrice ? money(group.total) : <span style={{ color: 'var(--text-faint)' }}>—</span>}
               </td>
-              <td className="num" style={{ textAlign: 'right', color: 'var(--text-secondary)' }}>
+              <td className="num" style={{ color: 'var(--text-secondary)', ...CELL }}>
                 {group.itemCount}
               </td>
-              <td>
+              <td style={CELL}>
                 <StatusPill status={head.status} />
+              </td>
+              <td style={CELL}>
+                {/* Shipping only means something for an order that went
+                    through; a failed or cancelled one never ships. */}
+                {head.status === 'success' || head.status === 'pending' ? (
+                  <StatusPill status={head.shipping_status} />
+                ) : (
+                  <span style={{ color: 'var(--text-faint)' }}>—</span>
+                )}
               </td>
             </tr>
           ]
@@ -240,12 +251,13 @@ function GroupedOrders({
                   <td />
                   <td />
                   <td />
-                  <td className="num" style={{ textAlign: 'right', color: 'var(--text-secondary)' }}>
+                  <td className="num" style={{ color: 'var(--text-secondary)', ...CELL }}>
                     {line.unit_price != null ? money(line.unit_price * (line.quantity ?? 1)) : '—'}
                   </td>
-                  <td className="num" style={{ textAlign: 'right', color: 'var(--text-secondary)' }}>
+                  <td className="num" style={{ color: 'var(--text-secondary)', ...CELL }}>
                     {line.quantity ?? 1}
                   </td>
+                  <td />
                   <td />
                 </tr>
               )

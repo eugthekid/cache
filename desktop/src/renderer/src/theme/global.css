@@ -384,23 +384,24 @@ td {
   overflow: hidden;
 }
 
+.screen-header {
+  /* Same height and alignment on every screen, whatever sits on the right
+     (tabs, buttons, a loading skeleton), so the title never moves when you
+     switch screens or when a screen finishes loading. */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 40px;
+  flex: none;
+  position: relative;
+}
+
 .screen-title {
+  line-height: 1;
   font-family: var(--font-display);
   font-size: 23px;
   font-weight: 700;
   letter-spacing: -0.01em;
-}
-
-.logo-mark {
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  background: var(--accent-gradient);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  box-shadow: 0 0 18px -2px oklch(70% 0.15 240 / 0.6);
 }
 
 .link-action {

@@ -430,6 +430,22 @@ class CatalogProduct(Base):
     synced_at: Mapped[datetime] = mapped_column(default=_now)
 
 
+class ProductFamily(Base):
+    """
+    A group of products that are versions of one item -- the tech stickers
+    that come as Lucario, Alolan Exeggutor, or a random pick of either. The
+    inventory list shows one row per family; clicking in shows each version.
+    Deleting a family (ungrouping) only forgets the grouping: every product
+    and unit underneath is untouched.
+    """
+    __tablename__ = "product_families"
+
+    id: Mapped[str] = mapped_column(primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    name: Mapped[str]
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
 class Product(Base):
     """
     The canonical identity of a thing you buy and sell -- what makes "I hold
@@ -464,6 +480,22 @@ class Product(Base):
 
     category: Mapped[str | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(default=_now)
+
+    # What kind of thing this is: "Elite Trainer Box", "Tin", "Booster Bundle".
+    # Free text from a fixed pick list in the app, so profit can be sliced by it.
+    product_type: Mapped[str | None] = mapped_column(default=None)
+
+    # Variants. A product that comes in versions (the Lucario and Alolan
+    # Exeggutor tech stickers) stays one Product PER version -- that is what
+    # order matching, retailers, sales and average cost already work on --
+    # and a ProductFamily groups them for display. `variant_kind` says what
+    # this version is: None (a plain product), 'specific' (you chose the
+    # version), or 'random' (blind: "Styles May Vary", the version unknown).
+    family_id: Mapped[str | None] = mapped_column(ForeignKey("product_families.id"), default=None)
+    variant_kind: Mapped[str | None] = mapped_column(default=None)
+    # Set when the user takes this product out of a family (or ungroups the
+    # family), so automatic grouping never puts it back.
+    family_opt_out: Mapped[bool] = mapped_column(default=False, server_default="0")
 
     # Catalog match state -- 'none' | 'suggested' | 'confirmed' | 'rejected'.
     # 'confirmed' covers BOTH a deterministic exact match (applied

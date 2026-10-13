@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app import crud, email_poller, tracking_poller
 from app.database import get_db
 from app.routers import backup, bot_service, catalog, dashboard, discord, email_account, inventory, license, orders, products, sources, sync, tracking_account
+from app.routers import families as families_router
 from app.routers import import_ as import_router
 from app.routers import settings as settings_router
 
@@ -64,6 +65,7 @@ app.include_router(sync.router)
 app.include_router(bot_service.router)
 app.include_router(catalog.router)
 app.include_router(products.router)
+app.include_router(families_router.router)
 app.include_router(tracking_account.router)
 
 

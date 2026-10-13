@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from app import crud, models
+from app import crud, dashboard_overview, models, schemas
 from app.database import get_db
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -173,3 +173,13 @@ def inventory_by_category(db: Session = Depends(get_db)):
         }
         for category, unit_count, total_spend, total_profit in rows
     ]
+
+
+@router.get("/overview", response_model=schemas.DashboardOverview)
+def overview(
+    period: str = Query(default="all", pattern="^(weekly|monthly|all)$"),
+    db: Session = Depends(get_db),
+):
+    """Everything the Dashboard shows, for this week, this month, or all time."""
+    user = crud.get_or_create_default_user(db)
+    return dashboard_overview.build_overview(db, user.id, period)

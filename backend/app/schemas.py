@@ -273,13 +273,22 @@ class ProductOut(BaseModel):
     canonical_name: str
     normalized_key: str
     category: Optional[str] = None
+    product_type: Optional[str] = None
+    variant_kind: Optional[str] = None
+    family_id: Optional[str] = None
     alias_count: int = 0
 
 
 class ProductGroup(BaseModel):
-    """One row of the grouped inventory view."""
+    """One row of the grouped inventory view -- a product, or a whole family
+    of versions of one item rolled into a single row."""
     product_id: Optional[str]
     name: Optional[str]
+    # Set on a family row: product_id is None and the versions are listed.
+    family_id: Optional[str] = None
+    variant_count: int = 0
+    member_product_ids: list[str] = []
+    product_type: Optional[str] = None
     total_units: int
     # Pre-delivery pipeline, in order: not_shipped -> in_transit -> in_hand.
     # See crud.item_status_for_shipping for how a unit moves between these
@@ -317,8 +326,13 @@ class ProductMerge(BaseModel):
 
 
 class ProductRename(BaseModel):
-    canonical_name: str
+    """Any of a product's editable fields; only the ones sent are changed, and
+    an empty string clears category / type / variant kind."""
+    canonical_name: Optional[str] = None
     category: Optional[str] = None
+    product_type: Optional[str] = None
+    # 'specific' | 'random' | '' (a plain product)
+    variant_kind: Optional[str] = None
 
 
 class MergeSuggestion(BaseModel):
@@ -514,10 +528,28 @@ class SaleOut(BaseModel):
     profit: Optional[float] = None
 
 
+class ProductFamilyRef(BaseModel):
+    family_id: str
+    name: str
+
+
+class ProductSibling(BaseModel):
+    product_id: str
+    label: str
+    variant_kind: Optional[str] = None
+    units: int
+    unsold: int
+
+
 class ProductDashboard(BaseModel):
     product_id: str
     name: str
     category: Optional[str] = None
+    product_type: Optional[str] = None
+    variant_kind: Optional[str] = None
+    # Set when this product is one version in a family.
+    family: Optional[ProductFamilyRef] = None
+    siblings: list[ProductSibling] = []
     total_units: int
     order_placed: int
     in_transit: int
@@ -528,6 +560,8 @@ class ProductDashboard(BaseModel):
     retailers: list[RetailerBreakdown]
     # Stores units can still be added for by hand (see retailers.MANUAL_RETAILERS).
     addable_retailers: list[str] = []
+    # Sales channels used so far, for the sale form's pick list.
+    channels: list[str] = []
     sales: list[SaleOut]
 
 
@@ -550,3 +584,138 @@ class SaleCreate(BaseModel):
     unit_price: float
     platform: Optional[str] = None
     sold_at: Optional[datetime] = None
+
+
+# --- Dashboard overview (see app/dashboard_overview.py) ---
+
+
+class OverviewKpis(BaseModel):
+    profit: float
+    revenue: float
+    cost: float
+    spent: float
+    units_sold: int
+    roi: Optional[float] = None
+    margin: Optional[float] = None
+
+
+class ChartBucket(BaseModel):
+    key: str
+    label: str
+    spent: float
+    revenue: float
+    profit: float
+    units: int
+    # True for the week or month still in progress.
+    partial: bool
+
+
+class OverviewChart(BaseModel):
+    granularity: str  # 'week' | 'month'
+    buckets: list[ChartBucket]
+
+
+class BreakdownRow(BaseModel):
+    name: str
+    units: int
+    revenue: float
+    cost: float
+    profit: float
+
+
+class OverviewBreakdown(BaseModel):
+    category: list[BreakdownRow]
+    channel: list[BreakdownRow]
+    product: list[BreakdownRow]
+
+
+class StageValue(BaseModel):
+    stage: str
+    units: int
+    cost: float
+
+
+class OverviewInventory(BaseModel):
+    units: int
+    cost: float
+    stages: list[StageValue]
+
+
+class RetailerSpend(BaseModel):
+    name: str
+    spent: float
+
+
+class DashboardOverview(BaseModel):
+    period: str
+    kpis: OverviewKpis
+    chart: OverviewChart
+    breakdown: OverviewBreakdown
+    inventory: OverviewInventory
+    spend_by_retailer: list[RetailerSpend]
+
+
+# --- product families / variants (see app/families.py) ---
+
+
+class FamilyMemberIn(BaseModel):
+    product_id: str
+    variant_kind: str
+
+
+class FamilyCreate(BaseModel):
+    name: str
+    members: list[FamilyMemberIn]
+
+
+class FamilyUpdate(BaseModel):
+    name: Optional[str] = None
+    product_type: Optional[str] = None
+    category: Optional[str] = None
+
+
+class FamilyVariant(BaseModel):
+    product_id: str
+    name: str
+    label: str
+    variant_kind: Optional[str] = None
+    units: int
+    order_placed: int
+    in_transit: int
+    in_hand: int
+    sold: int
+    avg_cost: Optional[float] = None
+    avg_sale_price: Optional[float] = None
+    profit: Optional[float] = None
+    # Its own picture, and for a random version the pictures of the versions
+    # it could turn out to be (shown overlapped when it has no picture).
+    image_url: Optional[str] = None
+    option_product_ids: list[str] = []
+    option_image_urls: list[str] = []
+
+
+class UngroupedProduct(BaseModel):
+    product_id: str
+    name: str
+
+
+class FamilyDashboard(BaseModel):
+    family_id: str
+    name: str
+    product_type: Optional[str] = None
+    category: Optional[str] = None
+    total_units: int
+    order_placed: int
+    in_transit: int
+    in_hand: int
+    sold: int
+    invested: float
+    avg_cost: Optional[float] = None
+    variants: list[FamilyVariant]
+    retailers: list[RetailerBreakdown]
+    ungrouped_products: list[UngroupedProduct]
+
+
+class ResolveUnits(BaseModel):
+    to_product_id: str
+    quantity: int

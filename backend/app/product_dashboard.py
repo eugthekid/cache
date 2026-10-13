@@ -52,6 +52,14 @@ def original_cost(item: models.InventoryItem, order: Optional[models.Order]) -> 
 
 
 def _product_units(db: Session, user_id: str, product_id: str) -> list[tuple[models.InventoryItem, Optional[models.Order]]]:
+    return units_for_products(db, user_id, [product_id])
+
+
+def units_for_products(
+    db: Session, user_id: str, product_ids: list[str]
+) -> list[tuple[models.InventoryItem, Optional[models.Order]]]:
+    """Every counted unit of any of these products (one product, or all the
+    versions in a family)."""
     rows = (
         db.query(models.InventoryItem, models.Order)
         .outerjoin(models.Order, models.InventoryItem.order_id == models.Order.id)
@@ -60,8 +68,8 @@ def _product_units(db: Session, user_id: str, product_id: str) -> list[tuple[mod
         .filter(models.InventoryItem.status.in_(COUNTED_STATUSES))
         .filter(
             or_(
-                models.InventoryItem.product_id == product_id,
-                and_(models.InventoryItem.product_id.is_(None), models.Order.product_id == product_id),
+                models.InventoryItem.product_id.in_(product_ids),
+                and_(models.InventoryItem.product_id.is_(None), models.Order.product_id.in_(product_ids)),
             )
         )
         .all()
@@ -69,14 +77,42 @@ def _product_units(db: Session, user_id: str, product_id: str) -> list[tuple[mod
     return [(item, order) for item, order in rows]
 
 
+def known_channels(db: Session, user_id: str) -> list[str]:
+    """Every sales channel used so far, most-used first, for the sale form's
+    pick list."""
+    counts: dict[str, int] = {}
+    rows = (
+        db.query(models.InventoryItem.sold_platform)
+        .filter(models.InventoryItem.user_id == user_id)
+        .filter(models.InventoryItem.sold_platform.isnot(None))
+    )
+    for (name,) in rows:
+        name = name.strip()
+        if name:
+            counts[name] = counts.get(name, 0) + 1
+    return [name for name, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+
+
+def canonical_channel(db: Session, user_id: str, typed: Optional[str]) -> Optional[str]:
+    """What the user typed for 'Sold on', but spelled the way an existing
+    channel already is -- "ebay" becomes "eBay" instead of starting a second
+    channel. A genuinely new name is kept as typed."""
+    typed = (typed or "").strip()
+    if not typed:
+        return None
+    for name in known_channels(db, user_id):
+        if name.lower() == typed.lower():
+            return name
+    return typed
+
+
 def average_cost(units) -> Optional[float]:
     costs = [c for item, order in units if (c := original_cost(item, order)) is not None]
     return sum(costs) / len(costs) if costs else None
 
 
-def build_dashboard(db: Session, user_id: str, product: models.Product) -> dict:
-    units = _product_units(db, user_id, product.id)
-
+def retailer_breakdown(units) -> list[dict]:
+    """Units split by retailer and stage, with each retailer's unit price."""
     retailers: dict[str, dict] = {}
     for item, order in units:
         label = retailer_label(item, order)
@@ -102,6 +138,13 @@ def build_dashboard(db: Session, user_id: str, product: models.Product) -> dict:
         r["min_unit_price"] = min(prices) if prices else None
         r["max_unit_price"] = max(prices) if prices else None
         breakdown.append(r)
+    return breakdown
+
+
+def build_dashboard(db: Session, user_id: str, product: models.Product) -> dict:
+    units = _product_units(db, user_id, product.id)
+
+    breakdown = retailer_breakdown(units)
 
     costs = [c for item, order in units if (c := original_cost(item, order)) is not None]
     sales = (
@@ -124,7 +167,8 @@ def build_dashboard(db: Session, user_id: str, product: models.Product) -> dict:
         "retailers": breakdown,
         # Stores units can still be added for by hand: the fixed list, minus
         # any that already have a card for this product.
-        "addable_retailers": [name for name in MANUAL_RETAILERS if name not in retailers],
+        "addable_retailers": [name for name in MANUAL_RETAILERS if name not in {r["retailer"] for r in breakdown}],
+        "channels": known_channels(db, user_id),
         "sales": [
             {
                 "id": s.id,
@@ -285,6 +329,7 @@ def record_sale(
 
     chosen = sorted(in_hand, key=lambda p: (distance(p), p[0].created_at))[:quantity]
     when = sold_at or _now()
+    platform = canonical_channel(db, user_id, platform)
     item_costs = {}
     for item, _ in chosen:
         item_costs[item.id] = item.cost_basis

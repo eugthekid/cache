@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import CacheLogo from '../components/CacheLogo'
 import { api } from '../api/client'
 import WavyBackground from '../components/WavyBackground'
 
@@ -127,25 +128,7 @@ function Activation({ onActivated }: ActivationProps): React.JSX.Element {
         }}
       >
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 13, textAlign: 'center' }}>
-          <div
-            className="logo-mark"
-            style={{ width: 60, height: 60, borderRadius: 18, boxShadow: '0 0 34px -4px oklch(70% 0.15 240 / 0.75)' }}
-          >
-            <svg width="30" height="30" viewBox="0 0 20 20" fill="none">
-              <path
-                d="M10 2 3 5.5 10 9l7-3.5L10 2Z"
-                stroke="oklch(14% 0.01 255)"
-                strokeWidth="1.8"
-                strokeLinejoin="round"
-              />
-              <path
-                d="M3 5.5V14l7 3.5 7-3.5V5.5M10 9v8.5"
-                stroke="oklch(14% 0.01 255)"
-                strokeWidth="1.8"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </div>
+          <CacheLogo size={64} />
           <div style={{ fontFamily: 'var(--font-display)', fontSize: 25, fontWeight: 700, letterSpacing: '-0.015em' }}>
             Cache
           </div>

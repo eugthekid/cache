@@ -314,12 +314,77 @@ export interface BotServiceStatus {
   log_path: string | null
 }
 
+/** What a version of an item is: a specific one you chose, or a blind
+ * "styles may vary" pick. null is a plain product. */
+export type VariantKind = 'specific' | 'random' | null
+
 export interface Product {
   id: string
   canonical_name: string
   normalized_key: string
   category: string | null
+  product_type: string | null
+  variant_kind: VariantKind
+  family_id: string | null
   alias_count: number
+}
+
+/** Any of a product's editable fields; send only the ones that change, and an
+ * empty string clears category / type / variant kind. */
+export interface ProductFields {
+  canonical_name?: string
+  category?: string | null
+  product_type?: string | null
+  variant_kind?: 'specific' | 'random' | ''
+}
+
+export interface ProductFamilyRef {
+  family_id: string
+  name: string
+}
+
+export interface ProductSibling {
+  product_id: string
+  label: string
+  variant_kind: VariantKind
+  units: number
+  unsold: number
+}
+
+export interface FamilyVariant {
+  product_id: string
+  name: string
+  label: string
+  variant_kind: VariantKind
+  units: number
+  order_placed: number
+  in_transit: number
+  in_hand: number
+  sold: number
+  avg_cost: number | null
+  avg_sale_price: number | null
+  profit: number | null
+  /** Its own picture; a random variant also lists the variants it could be. */
+  image_url: string | null
+  option_product_ids: string[]
+  option_image_urls: string[]
+}
+
+export interface FamilyDashboardData {
+  family_id: string
+  name: string
+  product_type: string | null
+  category: string | null
+  total_units: number
+  order_placed: number
+  in_transit: number
+  in_hand: number
+  sold: number
+  invested: number
+  avg_cost: number | null
+  variants: FamilyVariant[]
+  retailers: ProductRetailerBreakdown[]
+  ungrouped_products: { product_id: string; name: string }[]
 }
 
 /** One row of the grouped inventory view -- "I hold 12 of these". */
@@ -360,7 +425,52 @@ export interface ProductDashboardData {
   retailers: ProductRetailerBreakdown[]
   /** Stores units can still be added for by hand. */
   addable_retailers: string[]
+  /** Sales channels used so far, for the sale form's pick list. */
+  channels: string[]
+  product_type: string | null
+  variant_kind: VariantKind
+  /** Set when this product is one version in a family. */
+  family: ProductFamilyRef | null
+  siblings: ProductSibling[]
   sales: ProductSale[]
+}
+
+export type OverviewPeriod = 'weekly' | 'monthly' | 'all'
+
+export interface OverviewBucket {
+  key: string
+  label: string
+  spent: number
+  revenue: number
+  profit: number
+  units: number
+  /** The week or month still in progress. */
+  partial: boolean
+}
+
+export interface BreakdownRow {
+  name: string
+  units: number
+  revenue: number
+  cost: number
+  profit: number
+}
+
+export interface DashboardOverview {
+  period: OverviewPeriod
+  kpis: {
+    profit: number
+    revenue: number
+    cost: number
+    spent: number
+    units_sold: number
+    roi: number | null
+    margin: number | null
+  }
+  chart: { granularity: 'week' | 'month'; buckets: OverviewBucket[] }
+  breakdown: { category: BreakdownRow[]; channel: BreakdownRow[]; product: BreakdownRow[] }
+  inventory: { units: number; cost: number; stages: { stage: string; units: number; cost: number }[] }
+  spend_by_retailer: { name: string; spent: number }[]
 }
 
 export interface RetailerCountEdit {
@@ -375,6 +485,12 @@ export interface RetailerCountEdit {
 export interface ProductGroup {
   product_id: string | null
   name: string | null
+  /** Set on a row that stands for a whole family of versions; product_id is
+   * null on it and the versions are listed in member_product_ids. */
+  family_id: string | null
+  variant_count: number
+  member_product_ids: string[]
+  product_type: string | null
   total_units: number
   /** Pre-delivery pipeline, in order: not_shipped -> in_transit -> in_hand,
    * kept in step automatically as an order's shipping_status updates from
@@ -603,6 +719,7 @@ export const api = {
     monthly: (months = 6) => get<MonthlyPoint[]>(`/dashboard/monthly?months=${months}`),
     aging: () => get<AgingSummary>('/dashboard/aging'),
     byRetailer: () => get<RetailerBreakdown[]>('/dashboard/by-retailer'),
+    overview: (period: OverviewPeriod) => get<DashboardOverview>(`/dashboard/overview?period=${period}`),
     byCategory: () => get<CategoryBreakdown[]>('/dashboard/by-category')
   },
 
@@ -638,6 +755,10 @@ export const api = {
       post<BulkResult>('/products/merge', { source_id: sourceId, target_id: targetId }),
     rename: (id: string, canonicalName: string, category?: string | null) =>
       patch<Product>(`/products/${id}`, { canonical_name: canonicalName, category }),
+    update: (id: string, fields: ProductFields) => patch<Product>(`/products/${id}`, fields),
+    /** Move unsold units of a random version to a specific one. */
+    resolve: (id: string, toProductId: string, quantity: number) =>
+      post<ProductDashboardData>(`/products/${id}/resolve`, { to_product_id: toProductId, quantity }),
     dashboard: (id: string) => get<ProductDashboardData>(`/products/${id}/dashboard`),
     /** Sets each listed retailer's stage counts; returns the refreshed dashboard. */
     updateCounts: (id: string, retailers: RetailerCountEdit[]) =>
@@ -648,6 +769,21 @@ export const api = {
     ) => post<ProductDashboardData>(`/products/${id}/sales`, sale),
     undoSale: (id: string, saleId: string) =>
       request<ProductDashboardData>(`/products/${id}/sales/${saleId}`, { method: 'DELETE' })
+  },
+
+  families: {
+    create: (name: string, members: { product_id: string; variant_kind: 'specific' | 'random' }[]) =>
+      post<FamilyDashboardData>('/families', { name, members }),
+    dashboard: (id: string) => get<FamilyDashboardData>(`/families/${id}/dashboard`),
+    /** Rename, or set type / category on every version at once. */
+    update: (id: string, fields: { name?: string; product_type?: string | null; category?: string | null }) =>
+      patch<FamilyDashboardData>(`/families/${id}`, fields),
+    /** Forget the grouping; products and units are untouched. */
+    ungroup: (id: string) => request<{ ungrouped: boolean }>(`/families/${id}`, { method: 'DELETE' }),
+    addMember: (id: string, productId: string, kind: 'specific' | 'random') =>
+      post<FamilyDashboardData>(`/families/${id}/members`, { product_id: productId, variant_kind: kind }),
+    removeMember: (id: string, productId: string) =>
+      request<{ dissolved: boolean }>(`/families/${id}/members/${productId}`, { method: 'DELETE' })
   },
 
   sync: {

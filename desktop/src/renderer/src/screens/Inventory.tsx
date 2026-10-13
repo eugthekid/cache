@@ -11,6 +11,7 @@ import BulkEditItems from '../components/BulkEditItems'
 import GroupedInventory from '../components/GroupedInventory'
 import ProductDetail from '../components/ProductDetail'
 import ProductDashboard from '../components/ProductDashboard'
+import FamilyDashboard from '../components/FamilyDashboard'
 import type { ProductGroup } from '../api/client'
 import type { Screen } from '../components/NavRail'
 import { datePatchValue, toDateInput } from '../dates'
@@ -22,6 +23,20 @@ const ITEM_STATUSES: InventoryStatus[] = ['not_shipped', 'in_transit', 'in_hand'
 type InventorySort = 'units_desc' | 'name_asc' | 'name_desc' | 'value_desc' | 'value_asc'
 
 const UNCATEGORIZED = '__uncategorized__'
+const HIDE_SOLD_OUT_KEY = 'cache_inventory_hide_sold_out'
+
+/** Every unit of this product has been sold (and at least one was). */
+function isSoldOut(g: ProductGroup): boolean {
+  return g.sold > 0 && g.not_shipped + g.in_transit + g.in_hand === 0
+}
+
+function loadHideSoldOut(): boolean {
+  try {
+    return localStorage.getItem(HIDE_SOLD_OUT_KEY) === '1'
+  } catch {
+    return false
+  }
+}
 
 function compareGroups(a: ProductGroup, b: ProductGroup, sort: InventorySort): number {
   switch (sort) {
@@ -160,8 +175,12 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
   )
   const [groups, setGroups] = useState<ProductGroup[]>([])
   const [viewingProductKey, setViewingProductKey] = useState<string | null>(null)
+  // The variant open inside a family (its own screen), if any.
+  const [viewingVariant, setViewingVariant] = useState<string | null>(null)
+  const [variantEditing, setVariantEditing] = useState(false)
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
+  const [hideSoldOut, setHideSoldOut] = useState(loadHideSoldOut)
   const [sort, setSort] = useState<InventorySort>('units_desc')
 
   function changeView(next: ViewMode): void {
@@ -171,7 +190,12 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
     // show a bulk bar with nothing on screen for it to refer to.
     setCheckedIds(new Set())
     setCheckedGroupKeys(new Set())
+    closeGroup()
+  }
+
+  function closeGroup(): void {
     setViewingProductKey(null)
+    setViewingVariant(null)
   }
 
   /** A unit's product comes from itself when standalone, otherwise from its
@@ -187,8 +211,20 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
    * otherwise the normalized name -- NOT a shared '__unmatched__' bucket,
    * which would make clicking into any one unmatched product show every
    * other unmatched product's units mixed in with it. */
-  function groupKey(productId: string | null, name: string | null): string {
+  function groupKey(productId: string | null, name: string | null, familyId?: string | null): string {
+    if (familyId) return `family:${familyId}`
     return productId ?? (name ?? 'unmatched').trim().toLowerCase()
+  }
+
+  /** The row a unit belongs to: its family's row when its product is one
+   * version in a family, otherwise its own product's. */
+  const familyOfProduct = new Map(
+    groups.flatMap((g) => (g.family_id ? g.member_product_ids.map((id) => [id, g.family_id as string] as const) : []))
+  )
+  function itemGroupKey(item: InventoryItem): string {
+    const productId = productIdFor(item)
+    const familyId = productId ? familyOfProduct.get(productId) : undefined
+    return groupKey(productId, productName(item, ordersById), familyId)
   }
 
   // Categories come from whatever's actually in the data, not a hardcoded
@@ -207,7 +243,19 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
     return category === categoryFilter
   }
 
+  const soldOutCount = groups.filter(isSoldOut).length
+  function toggleHideSoldOut(): void {
+    const next = !hideSoldOut
+    setHideSoldOut(next)
+    try {
+      localStorage.setItem(HIDE_SOLD_OUT_KEY, next ? '1' : '0')
+    } catch {
+      // a blocked localStorage just means the choice isn't remembered
+    }
+  }
+
   const visibleGroups = groups
+    .filter((g) => !(hideSoldOut && isSoldOut(g)))
     .filter((g) => matchesFilters(g.name ?? '', g.category))
     .sort((a, b) => compareGroups(a, b, sort))
 
@@ -219,14 +267,15 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
     .sort((a, b) => compareItems(a, b, sort, ordersById))
 
   const viewingGroup = viewingProductKey
-    ? groups.find((g) => groupKey(g.product_id, g.name) === viewingProductKey)
+    ? groups.find((g) => groupKey(g.product_id, g.name, g.family_id) === viewingProductKey)
     : undefined
 
   const filtersActive = search.trim() !== '' || categoryFilter !== 'all'
+  const groupFiltersActive = filtersActive || (hideSoldOut && soldOutCount > 0)
 
   function toggleGroupChecked(key: string, shiftKey = false): void {
     const anchor = lastCheckedGroupRef.current
-    const ordered = visibleGroups.map((g) => groupKey(g.product_id, g.name))
+    const ordered = visibleGroups.map((g) => groupKey(g.product_id, g.name, g.family_id))
     setCheckedGroupKeys((prev) => toggleWithRange(prev, key, anchor, shiftKey, ordered))
     lastCheckedGroupRef.current = key
   }
@@ -235,7 +284,7 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
     setCheckedGroupKeys((prev) =>
       prev.size === visibleGroups.length
         ? new Set()
-        : new Set(visibleGroups.map((g) => groupKey(g.product_id, g.name)))
+        : new Set(visibleGroups.map((g) => groupKey(g.product_id, g.name, g.family_id)))
     )
   }
 
@@ -244,7 +293,7 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
    * a product row isn't a row in the database, its units are. */
   function itemIdsForGroups(keys: Set<string>): string[] {
     return items
-      .filter((item) => keys.has(groupKey(productIdFor(item), productName(item, ordersById))))
+      .filter((item) => keys.has(itemGroupKey(item)))
       .map((item) => item.id)
   }
 
@@ -286,6 +335,7 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
         // view. Same bug class Orders.tsx already learned this lesson
         // from once (see that screen's own "limit" history).
         api.orders.list(),
+        // Also groups any new variants of one item, so the list is current.
         api.products.grouped()
       ])
       setItems(itemList)
@@ -406,7 +456,7 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
   if (loading) {
     return (
       <>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+        <div className="screen-header">
           <div className="screen-title">Inventory</div>
           <Skel style={{ width: 60, height: 12 }} />
         </div>
@@ -433,14 +483,14 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
 
   return (
     <>
-      <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div className="screen-header">
         <div className="screen-title">Inventory</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <div className="num" style={{ fontSize: 12, color: 'var(--text-faint)' }}>
             {filtersActive ? `${visibleItems.length} of ${items.length}` : items.length} unit
             {items.length === 1 ? '' : 's'}
             {view === 'grouped' && groups.length > 0 &&
-              ` · ${filtersActive ? `${visibleGroups.length} of ${groups.length}` : groups.length} products`}
+              ` · ${groupFiltersActive ? `${visibleGroups.length} of ${groups.length}` : groups.length} products`}
           </div>
           <div style={{ display: 'flex', gap: 4, background: 'var(--field-bg)', border: '1px solid var(--field-border)', borderRadius: 8, padding: 3 }}>
             {(['grouped', 'units'] as ViewMode[]).map((m) => (
@@ -528,6 +578,27 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
           <option value="value_desc">Value: high to low</option>
           <option value="value_asc">Value: low to high</option>
         </select>
+
+        {view === 'grouped' && (
+          <button
+            onClick={toggleHideSoldOut}
+            aria-pressed={hideSoldOut}
+            title="Hide products where every unit has been sold"
+            style={{
+              height: 30,
+              padding: '0 12px',
+              fontSize: 12,
+              fontWeight: 600,
+              borderRadius: 8,
+              cursor: 'pointer',
+              border: hideSoldOut ? '1.5px solid var(--accent-cyan)' : '1px solid var(--field-border)',
+              background: hideSoldOut ? 'oklch(78% 0.12 215 / 0.14)' : 'var(--field-bg)',
+              color: hideSoldOut ? 'var(--accent-cyan)' : 'var(--text-secondary)'
+            }}
+          >
+            Hide sold out{soldOutCount > 0 ? ` (${soldOutCount})` : ''}
+          </button>
+        )}
       </div>
 
       <div
@@ -575,18 +646,45 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
                 }
               />
             </>
+          ) : view === 'grouped' && viewingProductKey && viewingGroup?.family_id && viewingVariant ? (
+            <ProductDashboard
+              key={viewingVariant}
+              group={{ ...viewingGroup, product_id: viewingVariant, family_id: null }}
+              categories={categoryOptions}
+              startInEdit={variantEditing}
+              onBack={() => setViewingVariant(null)}
+              onChanged={() => load(true)}
+            />
+          ) : view === 'grouped' && viewingProductKey && viewingGroup?.family_id ? (
+            <FamilyDashboard
+              key={viewingGroup.family_id}
+              familyId={viewingGroup.family_id}
+              group={viewingGroup}
+              categories={categoryOptions}
+              onBack={closeGroup}
+              onOpenVariant={(id, edit) => {
+                setVariantEditing(!!edit)
+                setViewingVariant(id)
+              }}
+              onChanged={() => load(true)}
+            />
           ) : view === 'grouped' && viewingProductKey && viewingGroup?.product_id ? (
             <ProductDashboard
               key={viewingGroup.product_id}
               group={viewingGroup}
-              onBack={() => setViewingProductKey(null)}
+              categories={categoryOptions}
+              onBack={closeGroup}
               onChanged={() => load(true)}
             />
           ) : view === 'grouped' && viewingProductKey ? (
             <ProductDetail
               group={
-                groups.find((g) => groupKey(g.product_id, g.name) === viewingProductKey) ?? {
+                groups.find((g) => groupKey(g.product_id, g.name, g.family_id) === viewingProductKey) ?? {
                   product_id: null,
+                  family_id: null,
+                  variant_count: 0,
+                  member_product_ids: [],
+                  product_type: null,
                   name: 'Unmatched',
                   total_units: 0,
                   in_hand: 0,
@@ -602,9 +700,9 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
                   category: null
                 }
               }
-              units={items.filter((i) => groupKey(productIdFor(i), productName(i, ordersById)) === viewingProductKey)}
+              units={items.filter((i) => itemGroupKey(i) === viewingProductKey)}
               ordersById={ordersById}
-              onBack={() => setViewingProductKey(null)}
+              onBack={closeGroup}
               onSelectUnit={selectItem}
               selectedId={selectedId}
               checkedIds={checkedIds}
@@ -612,7 +710,7 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
               onToggleAll={() =>
                 toggleAllIn(
                   items
-                    .filter((i) => groupKey(productIdFor(i), productName(i, ordersById)) === viewingProductKey)
+                    .filter((i) => itemGroupKey(i) === viewingProductKey)
                     .map((i) => i.id)
                 )
               }
@@ -627,10 +725,10 @@ function Inventory({ onNavigate }: { onNavigate?: (screen: Screen) => void }): R
           ) : view === 'grouped' ? (
             <GroupedInventory
               groups={visibleGroups}
-              onOpenProduct={(group) => setViewingProductKey(groupKey(group.product_id, group.name))}
+              onOpenProduct={(group) => setViewingProductKey(groupKey(group.product_id, group.name, group.family_id))}
               onChanged={load}
               checkedKeys={checkedGroupKeys}
-              onToggle={(group, shiftKey) => toggleGroupChecked(groupKey(group.product_id, group.name), shiftKey)}
+              onToggle={(group, shiftKey) => toggleGroupChecked(groupKey(group.product_id, group.name, group.family_id), shiftKey)}
               onToggleAll={toggleAllGroupsChecked}
             />
           ) : visibleItems.length === 0 ? (

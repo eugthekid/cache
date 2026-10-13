@@ -14,7 +14,9 @@ interface ErrorStateProps {
 function ErrorState({ screenTitle, message, onRetry }: ErrorStateProps): React.JSX.Element {
   return (
     <>
-      <div className="screen-title">{screenTitle}</div>
+      <div className="screen-header">
+        <div className="screen-title">{screenTitle}</div>
+      </div>
       <div
         className="card"
         style={{

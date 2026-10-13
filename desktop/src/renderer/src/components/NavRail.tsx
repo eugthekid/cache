@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import CacheLogo from './CacheLogo'
 
 export type Screen = 'dashboard' | 'orders' | 'inventory' | 'settings'
 
@@ -24,16 +25,7 @@ function NavRail({ active, onNavigate, userEmail }: NavRailProps): React.JSX.Ele
   return (
     <div className="nav-rail" style={{ width: collapsed ? 76 : 240, alignItems: collapsed ? 'center' : 'stretch' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: collapsed ? 0 : '0 6px', justifyContent: collapsed ? 'center' : 'flex-start' }}>
-        <div className="logo-mark">
-          <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
-            <path
-              d="M10 2 3 5.5 10 9l7-3.5L10 2Z"
-              stroke="oklch(14% 0.01 255)"
-              strokeWidth="2"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </div>
+        <CacheLogo size={40} />
         {!collapsed && (
           <div style={{ fontFamily: 'var(--font-display)', fontSize: 17, fontWeight: 600, letterSpacing: '-0.01em' }}>
             CACHE

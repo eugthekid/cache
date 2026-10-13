@@ -8,6 +8,7 @@ import DiscordConnect from '../components/DiscordConnect'
 import EmailConnect from '../components/EmailConnect'
 import TrackingConnect from '../components/TrackingConnect'
 import { Skel } from '../components/Skeleton'
+import { VARIANTS_LAYOUTS, getVariantsLayout, setVariantsLayout, type VariantsLayout } from '../preferences'
 
 function Settings(): React.JSX.Element {
   const [license, setLicense] = useState<LicenseStatus | null>(null)
@@ -20,6 +21,7 @@ function Settings(): React.JSX.Element {
   const [restoreMessage, setRestoreMessage] = useState<string | null>(null)
   const restoreInputRef = useRef<HTMLInputElement | null>(null)
   const [showImport, setShowImport] = useState(false)
+  const [variantsLayout, setVariantsLayoutState] = useState<VariantsLayout>(getVariantsLayout)
 
   useEffect(() => {
     load()
@@ -97,7 +99,9 @@ function Settings(): React.JSX.Element {
   if (loading) {
     return (
       <>
-        <div className="screen-title">Settings</div>
+        <div className="screen-header">
+          <div className="screen-title">Settings</div>
+        </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {[1, 2, 3, 4].map((i) => (
             <div key={i} className="card" style={{ padding: '22px 26px', display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -119,8 +123,8 @@ function Settings(): React.JSX.Element {
 
   return (
     <>
-      <div className="screen-title" style={{ position: 'relative' }}>
-        Settings
+      <div className="screen-header">
+        <div className="screen-title">Settings</div>
       </div>
 
       <div
@@ -206,6 +210,33 @@ function Settings(): React.JSX.Element {
           />
           <input ref={restoreInputRef} type="file" accept=".cache" style={{ display: 'none' }} onChange={handleRestoreFile} />
           <RebuildDeleted />
+        </div>
+
+        <div className="card" style={{ padding: '22px 26px', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Display</div>
+          <SettingRow
+            label="Variants layout"
+            sub={VARIANTS_LAYOUTS.find((l) => l.key === variantsLayout)?.sub ?? ''}
+            action={
+              <select
+                className="field-input"
+                aria-label="Variants layout"
+                style={{ width: 'auto', height: 32, padding: '0 10px', fontSize: 12.5 }}
+                value={variantsLayout}
+                onChange={(e) => {
+                  const next = e.target.value as VariantsLayout
+                  setVariantsLayoutState(next)
+                  setVariantsLayout(next)
+                }}
+              >
+                {VARIANTS_LAYOUTS.map((l) => (
+                  <option key={l.key} value={l.key}>
+                    {l.label}
+                  </option>
+                ))}
+              </select>
+            }
+          />
         </div>
 
         <div className="card" style={{ padding: '22px 26px', display: 'flex', flexDirection: 'column' }}>

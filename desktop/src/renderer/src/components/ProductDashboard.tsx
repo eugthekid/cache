@@ -3,13 +3,19 @@ import {
   api,
   type ProductDashboardData,
   type ProductGroup,
+  type ProductFields,
   type ProductRetailerBreakdown
 } from '../api/client'
 import { RetailerBadge, retailerColor } from './retailerBrand'
+import ItemDetails from './ItemDetails'
 
 interface ProductDashboardProps {
+  /** Categories already in use, offered in the Category dropdown. */
+  categories: string[]
   group: ProductGroup
   onBack: () => void
+  /** Open straight into count editing (from a variant's "Edit counts" button). */
+  startInEdit?: boolean
   /** Called after anything that changes counts, so the product list the
    * user returns to isn't showing stale totals. */
   onChanged: () => void
@@ -71,7 +77,7 @@ function todayInput(): string {
  * total, the stage bar and the average cost are just sums of what's typed,
  * so the screen always agrees with itself.
  */
-function ProductDashboard({ group, onBack, onChanged }: ProductDashboardProps): React.JSX.Element {
+function ProductDashboard({ group, categories, onBack, startInEdit, onChanged }: ProductDashboardProps): React.JSX.Element {
   const productId = group.product_id as string
   const [data, setData] = useState<ProductDashboardData | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -90,16 +96,30 @@ function ProductDashboard({ group, onBack, onChanged }: ProductDashboardProps): 
   const [soldOn, setSoldOn] = useState(todayInput())
   const [selling, setSelling] = useState(false)
   const [saleError, setSaleError] = useState<string | null>(null)
+  const [moveQty, setMoveQty] = useState('1')
+  const [moveTo, setMoveTo] = useState('')
+  const [moving, setMoving] = useState(false)
+  const [moveError, setMoveError] = useState<string | null>(null)
 
   useEffect(() => {
     let live = true
     api.products
       .dashboard(productId)
-      .then((d) => live && setData(d))
+      .then((d) => {
+        if (!live) return
+        setData(d)
+        if (startInEdit) {
+          setDrafts(Object.fromEntries(d.retailers.map((r) => [r.retailer, toDraft(r)])))
+          setEditing(true)
+        }
+      })
       .catch((err) => live && setError(err instanceof Error ? err.message : 'Failed to load this product'))
     return () => {
       live = false
     }
+  // startInEdit only matters on first load; the key on this component
+  // remounts it for each variant.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [productId])
 
   if (error) {
@@ -268,6 +288,36 @@ function ProductDashboard({ group, onBack, onChanged }: ProductDashboardProps): 
     }
   }
 
+  async function saveFields(fields: ProductFields): Promise<void> {
+    try {
+      await api.products.update(productId, fields)
+      setData(await api.products.dashboard(productId))
+      onChanged()
+    } catch (err) {
+      setSaleError(err instanceof Error ? err.message : 'That didn’t save')
+    }
+  }
+
+  const specificSiblings = data.siblings.filter((x) => x.product_id !== productId && x.variant_kind === 'specific')
+  const unsold = data.siblings.find((x) => x.product_id === productId)?.unsold ?? 0
+  const moveCount = Number(moveQty)
+  const moveValid = Number.isInteger(moveCount) && moveCount >= 1 && moveCount <= unsold && moveTo !== ''
+
+  async function moveUnits(): Promise<void> {
+    if (!moveValid) return
+    setMoving(true)
+    setMoveError(null)
+    try {
+      setData(await api.products.resolve(productId, moveTo, moveCount))
+      setMoveQty('1')
+      onChanged()
+    } catch (err) {
+      setMoveError(err instanceof Error ? err.message : 'Couldn’t move those units')
+    } finally {
+      setMoving(false)
+    }
+  }
+
   async function undoSale(saleId: string): Promise<void> {
     setSaleError(null)
     try {
@@ -319,6 +369,11 @@ function ProductDashboard({ group, onBack, onChanged }: ProductDashboardProps): 
           )}
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 14, fontWeight: 600 }}>{data.name}</div>
+            {data.family && (
+              <div style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
+                {data.variant_kind === 'random' ? 'Random variant' : 'Variant'} of {data.family.name}
+              </div>
+            )}
             <div className="num" style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
               {total} units
               {avgCost != null && ` · avg cost ${money(avgCost)}`}
@@ -345,6 +400,16 @@ function ProductDashboard({ group, onBack, onChanged }: ProductDashboardProps): 
             Edit counts
           </button>
         )}
+      </div>
+
+      <div style={dim()}>
+        <ItemDetails
+          productType={data.product_type}
+          category={data.category}
+          variantKind={data.variant_kind}
+          categories={categories}
+          onChange={saveFields}
+        />
       </div>
 
       <div style={dim({ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 8 })}>
@@ -556,6 +621,53 @@ function ProductDashboard({ group, onBack, onChanged }: ProductDashboardProps): 
         )}
       </div>
 
+      {data.variant_kind === 'random' && specificSiblings.length > 0 && (
+        <div className="card" style={dim({ padding: '16px 18px' })}>
+          <div style={{ fontSize: 13.5, fontWeight: 600 }}>Opened some?</div>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '4px 0 12px' }}>
+            Once you know which variant these turned out to be, move them there. They keep their order, retailer and
+            price, and the counts here and on that version update.
+          </div>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <label>
+              <div className="field-label">Units</div>
+              <input
+                className="field-input num"
+                type="number"
+                min={1}
+                max={unsold}
+                step={1}
+                value={moveQty}
+                onChange={(e) => setMoveQty(e.target.value)}
+                style={{ marginTop: 4, width: 90 }}
+              />
+            </label>
+            <label>
+              <div className="field-label">Turned out to be</div>
+              <select
+                className="field-input"
+                value={moveTo}
+                onChange={(e) => setMoveTo(e.target.value)}
+                style={{ marginTop: 4, minWidth: 200, height: 36 }}
+              >
+                <option value="">Pick a variant…</option>
+                {specificSiblings.map((x) => (
+                  <option key={x.product_id} value={x.product_id}>
+                    {x.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button className="btn-ghost" style={{ padding: '8px 16px', fontSize: 12.5 }} onClick={moveUnits} disabled={!moveValid || moving}>
+              {moving ? 'Moving…' : 'Move units'}
+            </button>
+          </div>
+          <div style={{ minHeight: 16, marginTop: 8, fontSize: 12, color: 'var(--status-failed)' }}>
+            {moveError ?? (moveQty !== '' && !moveValid && moveTo ? `Enter 1 to ${unsold}, the number of unsold units here.` : '')}
+          </div>
+        </div>
+      )}
+
       <div className="card" style={dim({ padding: '16px 18px' })}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 12 }}>
           <div style={{ fontSize: 13.5, fontWeight: 600 }}>Record a sale</div>
@@ -574,7 +686,19 @@ function ProductDashboard({ group, onBack, onChanged }: ProductDashboardProps): 
           </label>
           <label>
             <div className="field-label">Sold on</div>
-            <input className="field-input" value={platform} placeholder="StockX" onChange={(e) => setPlatform(e.target.value)} style={{ marginTop: 4 }} />
+            <input
+              className="field-input"
+              list="sales-channels"
+              value={platform}
+              placeholder="Pick or type a channel"
+              onChange={(e) => setPlatform(e.target.value)}
+              style={{ marginTop: 4 }}
+            />
+            <datalist id="sales-channels">
+              {data.channels.map((name) => (
+                <option key={name} value={name} />
+              ))}
+            </datalist>
           </label>
           <label>
             <div className="field-label">Date</div>

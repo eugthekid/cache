@@ -46,7 +46,7 @@ CATEGORY_IDS = {
 }
 
 # Display label for Product.category, keyed by CatalogProduct.category.
-CATEGORY_LABELS = {"pokemon": "Pokemon", "onepiece": "One Piece"}
+CATEGORY_LABELS = {"pokemon": "Pokémon TCG", "onepiece": "One Piece"}
 
 
 def catalog_display_name(catalog_product: "models.CatalogProduct") -> str:
