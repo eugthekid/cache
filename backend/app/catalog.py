@@ -51,37 +51,100 @@ CATEGORY_LABELS = {"pokemon": "Pokémon TCG", "onepiece": "One Piece"}
 
 _NO_REAL_SET = {"Miscellaneous Cards & Products", "Miscellaneous Cards"}
 
+# Generic product types. Only these get the set put in front of them: a
+# "Tin" or a "Premium Poster Collection" says nothing about which release it
+# belongs to, while a named product ("Unova Heavy Hitters Premium
+# Collection") already stands on its own.
+GENERIC_TYPES = {
+    "elite trainer box", "booster bundle", "booster box", "booster pack", "sleeved booster pack",
+    "tin", "mini tin", "mini tins", "poster collection", "premium poster collection",
+    "tech sticker collection", "figure collection", "ultra premium collection",
+    "super premium collection", "premium collection", "3 pack blister", "blister",
+    "collection box", "build battle box", "booster display box", "display box",
+    "binder collection", "pin collection", "illustration collection",
+}
 
-def standard_pokemon_name(name: str, set_name: Optional[str]) -> str:
+_COLON_VARIANT = re.compile(r"^(.*\S):\s+([^:\[\]()]+)$")
+
+
+def colon_variant(db: "Session", catalog_product: "models.CatalogProduct") -> Optional[tuple[str, str]]:
     """
-    "Pokémon TCG: <Set> <Product>" -- the one naming convention for anything
-    that belongs to a set, with the series ("Mega Evolution") left out.
+    "Premium Poster Collection: Mega Gardevoir" -> ("Premium Poster Collection",
+    "Mega Gardevoir"), but only when the catalog proves it: at least two
+    products in the same set share that "Premium Poster Collection:" opening.
+    Splitting on every colon would turn "Mega Evolution: Ascended Heroes ..."
+    and "Pokemon TCG: ..." into false variants.
+    """
+    m = _COLON_VARIANT.match(catalog_product.name)
+    if not m or not catalog_product.set_name or catalog_product.set_name.split(": ")[-1] in _NO_REAL_SET:
+        return None
+    prefix, tail = m.group(1), m.group(2).strip()
+    from app import families  # lazy, see standard_pokemon_name
+
+    if families._SERIES_PREFIX.match(f"{prefix}: "):
+        return None  # "Mega Evolution: Ascended Heroes ..." -- a series, not a product line
+    if re.search(r"\b(case|set of|display)\b", tail, re.I):
+        return None
+    siblings = (
+        db.query(models.CatalogProduct)
+        .filter(
+            models.CatalogProduct.set_name == catalog_product.set_name,
+            models.CatalogProduct.name.like(f"{prefix}: %"),
+        )
+        .all()
+    )
+    real = [c for c in siblings if not re.search(r"\b(case|set of|display)\b", c.name, re.I)]
+    return (prefix, tail) if len(real) >= 2 else None
+
+
+def standard_pokemon_name(
+    name: str, set_name: Optional[str], colon: Optional[tuple[str, str]] = None
+) -> str:
+    """
+    "Pokémon TCG: <Set> <Product> - <Variant>" -- the one naming convention.
 
       "Premium Poster Collection: Mega Gardevoir" + "ME: Ascended Heroes"
-        -> "Pokémon TCG: Ascended Heroes Premium Poster Collection: Mega Gardevoir"
+        -> "Pokémon TCG: Ascended Heroes Premium Poster Collection - Mega Gardevoir"
 
-    The set is only added when the name doesn't already say it: the catalog
-    often writes "30th Celebration Sylveon ex Box" (set already there) or
-    "Mega Evolution: Ascended Heroes Tech Sticker Collection" (series in
-    front of it), and a set whose first words already open the name
-    ("First Partner Collection 2026" vs "First Partner Illustration
-    Collection") would only read as a stutter.
+    * The series ("Mega Evolution") is left out.
+    * A variant is always written after " - ", whether the source wrote it as
+      [Brackets], (Parentheses), a colon (`colon` carries the catalog-proven
+      split) or already a dash. "(Series 2)", "(Exclusive)" and the like are
+      not variants and stay as they are.
+    * "Styles May Vary" goes: the variant reads "Sylveon or Greninja" and the
+      "or" is what marks it random.
+    * The set is added only to generic types ("Tin", "Poster Collection"),
+      and only when the name doesn't already say it. A named product
+      ("Unova Heavy Hitters Premium Collection") is left as the catalog has it.
     """
     from app import families  # lazy: families pulls in the dashboard code
 
     text = families._SITE_PREFIX.sub("", name).strip()
     text = families._SERIES_PREFIX.sub("", text).strip()
+    if colon:
+        base, variant, random = colon[0], colon[1], False
+    else:
+        info = families.parse_product(text)
+        base, variant = info["base"], info["variant"]
+        # parse_product returns the base with the site prefix normalized.
+        base = families._SITE_PREFIX.sub("", base).strip()
+        random = info["kind"] == "random" and not variant
+
     _, set_ = families.split_set(set_name)
-    if not set_ or set_ in _NO_REAL_SET:
-        return f"Pokémon TCG: {text}"
-    set_tokens = families._norm(set_).split()
-    lead = " ".join(set_tokens[:2])
-    if lead and lead in families._norm(text):
-        return f"Pokémon TCG: {text}"
-    return f"Pokémon TCG: {set_} {text}"
+    if set_ and set_ not in _NO_REAL_SET:
+        lead = " ".join(families._norm(set_).split()[:2])
+        generic = families._norm(re.sub(r"\(.*?\)", "", base)).removeprefix("pokemon center ") in GENERIC_TYPES
+        if generic and lead not in families._norm(base):
+            base = f"{set_} {base}"
+    out = f"Pokémon TCG: {base}"
+    if variant:
+        out += f" - {variant}"
+    elif random:
+        out += " - Styles May Vary"
+    return out
 
 
-def catalog_display_name(catalog_product: "models.CatalogProduct") -> str:
+def catalog_display_name(catalog_product: "models.CatalogProduct", db: Optional["Session"] = None) -> str:
     """
     The name a Product takes on when it's matched to this catalog entry.
     Prefixed by game/franchise so it reads consistently in a product list
@@ -89,10 +152,12 @@ def catalog_display_name(catalog_product: "models.CatalogProduct") -> str:
     without it, a booster box and a pair of sneakers look like the same
     kind of thing at a glance. Colon, not a dash, for every game -- "X: "
     is the one shared convention across all of them. Pokémon products also
-    carry their set -- see standard_pokemon_name.
+    carry their set and a dashed variant -- see standard_pokemon_name. Pass
+    `db` so a colon-written variant can be confirmed from the catalog.
     """
     if catalog_product.category == "pokemon":
-        return standard_pokemon_name(catalog_product.name, catalog_product.set_name)
+        colon = colon_variant(db, catalog_product) if db is not None else None
+        return standard_pokemon_name(catalog_product.name, catalog_product.set_name, colon)
     if catalog_product.category == "onepiece":
         return f"One Piece: {catalog_product.name}"
     return catalog_product.name
@@ -332,7 +397,7 @@ def find_catalog_matches(db: Session, user_id: str) -> dict:
             # "CollectionSeries 2" or the missing-space/price-in-title
             # cases. Safe here specifically because it's an EXACT
             # normalized match, not a guess.
-            product.canonical_name = catalog_display_name(exact)
+            product.canonical_name = catalog_display_name(exact, db)
             product.category = CATEGORY_LABELS.get(exact.category, exact.category)
             auto_confirmed += 1
             continue
