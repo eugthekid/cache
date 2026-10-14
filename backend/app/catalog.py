@@ -49,6 +49,38 @@ CATEGORY_IDS = {
 CATEGORY_LABELS = {"pokemon": "Pokémon TCG", "onepiece": "One Piece"}
 
 
+_NO_REAL_SET = {"Miscellaneous Cards & Products", "Miscellaneous Cards"}
+
+
+def standard_pokemon_name(name: str, set_name: Optional[str]) -> str:
+    """
+    "Pokémon TCG: <Set> <Product>" -- the one naming convention for anything
+    that belongs to a set, with the series ("Mega Evolution") left out.
+
+      "Premium Poster Collection: Mega Gardevoir" + "ME: Ascended Heroes"
+        -> "Pokémon TCG: Ascended Heroes Premium Poster Collection: Mega Gardevoir"
+
+    The set is only added when the name doesn't already say it: the catalog
+    often writes "30th Celebration Sylveon ex Box" (set already there) or
+    "Mega Evolution: Ascended Heroes Tech Sticker Collection" (series in
+    front of it), and a set whose first words already open the name
+    ("First Partner Collection 2026" vs "First Partner Illustration
+    Collection") would only read as a stutter.
+    """
+    from app import families  # lazy: families pulls in the dashboard code
+
+    text = families._SITE_PREFIX.sub("", name).strip()
+    text = families._SERIES_PREFIX.sub("", text).strip()
+    _, set_ = families.split_set(set_name)
+    if not set_ or set_ in _NO_REAL_SET:
+        return f"Pokémon TCG: {text}"
+    set_tokens = families._norm(set_).split()
+    lead = " ".join(set_tokens[:2])
+    if lead and lead in families._norm(text):
+        return f"Pokémon TCG: {text}"
+    return f"Pokémon TCG: {set_} {text}"
+
+
 def catalog_display_name(catalog_product: "models.CatalogProduct") -> str:
     """
     The name a Product takes on when it's matched to this catalog entry.
@@ -56,10 +88,11 @@ def catalog_display_name(catalog_product: "models.CatalogProduct") -> str:
     once non-TCG categories (sneakers, apparel) sit alongside it --
     without it, a booster box and a pair of sneakers look like the same
     kind of thing at a glance. Colon, not a dash, for every game -- "X: "
-    is the one shared convention across all of them.
+    is the one shared convention across all of them. Pokémon products also
+    carry their set -- see standard_pokemon_name.
     """
     if catalog_product.category == "pokemon":
-        return f"Pokémon TCG: {catalog_product.name}"
+        return standard_pokemon_name(catalog_product.name, catalog_product.set_name)
     if catalog_product.category == "onepiece":
         return f"One Piece: {catalog_product.name}"
     return catalog_product.name
