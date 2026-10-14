@@ -388,6 +388,11 @@ function FamilyDashboard({ familyId, group, categories, onBack, onOpenVariant, o
               {d.name}
             </div>
           )}
+          {(d.set_name || d.series_name) && (
+            <div style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
+              {[d.series_name, d.set_name].filter(Boolean).join(' · ')}
+            </div>
+          )}
           <div className="num" style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
             {d.variants.length} variants · {d.total_units} units
             {d.avg_cost != null && ` · avg cost ${money(d.avg_cost)}`}

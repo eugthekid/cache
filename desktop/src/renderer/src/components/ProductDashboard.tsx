@@ -299,7 +299,10 @@ function ProductDashboard({ group, categories, onBack, startInEdit, onChanged }:
   }
 
   const specificSiblings = data.siblings.filter((x) => x.product_id !== productId && x.variant_kind === 'specific')
-  const unsold = data.siblings.find((x) => x.product_id === productId)?.unsold ?? 0
+  // Variants you could still turn random units into that have no product yet
+  // (a random tin named "Sylveon or Greninja" before you hold either).
+  const newVariants = (data.variant_hint?.kind === 'random' ? data.variant_hint.others : []).filter((o) => !o.product_id)
+  const unsold = data.total_units - data.sold
   const moveCount = Number(moveQty)
   const moveValid = Number.isInteger(moveCount) && moveCount >= 1 && moveCount <= unsold && moveTo !== ''
 
@@ -308,7 +311,14 @@ function ProductDashboard({ group, categories, onBack, startInEdit, onChanged }:
     setMoving(true)
     setMoveError(null)
     try {
-      setData(await api.products.resolve(productId, moveTo, moveCount))
+      setData(
+        await api.products.resolve(
+          productId,
+          moveTo.startsWith('new:') ? { variant: moveTo.slice(4) } : { productId: moveTo },
+          moveCount
+        )
+      )
+      setMoveTo('')
       setMoveQty('1')
       onChanged()
     } catch (err) {
@@ -369,10 +379,21 @@ function ProductDashboard({ group, categories, onBack, startInEdit, onChanged }:
           )}
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 14, fontWeight: 600 }}>{data.name}</div>
-            {data.family && (
+            {(data.set_name || data.series_name) && (
+              <div style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
+                {[data.series_name, data.set_name].filter(Boolean).join(' · ')}
+              </div>
+            )}
+            {data.family ? (
               <div style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
                 {data.variant_kind === 'random' ? 'Random variant' : 'Variant'} of {data.family.name}
               </div>
+            ) : (
+              data.variant_hint && (
+                <div style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
+                  {data.variant_hint.kind === 'random' ? 'Random variant' : `Variant: ${data.variant_hint.variant}`}
+                </div>
+              )
             )}
             <div className="num" style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
               {total} units
@@ -621,7 +642,7 @@ function ProductDashboard({ group, categories, onBack, startInEdit, onChanged }:
         )}
       </div>
 
-      {data.variant_kind === 'random' && specificSiblings.length > 0 && (
+      {data.variant_kind === 'random' && specificSiblings.length + newVariants.length > 0 && (
         <div className="card" style={dim({ padding: '16px 18px' })}>
           <div style={{ fontSize: 13.5, fontWeight: 600 }}>Opened some?</div>
           <div style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '4px 0 12px' }}>
@@ -656,6 +677,11 @@ function ProductDashboard({ group, categories, onBack, startInEdit, onChanged }:
                     {x.label}
                   </option>
                 ))}
+                {newVariants.map((o) => (
+                  <option key={o.label} value={`new:${o.label}`}>
+                    {o.label}
+                  </option>
+                ))}
               </select>
             </label>
             <button className="btn-ghost" style={{ padding: '8px 16px', fontSize: 12.5 }} onClick={moveUnits} disabled={!moveValid || moving}>
@@ -664,6 +690,29 @@ function ProductDashboard({ group, categories, onBack, startInEdit, onChanged }:
           </div>
           <div style={{ minHeight: 16, marginTop: 8, fontSize: 12, color: 'var(--status-failed)' }}>
             {moveError ?? (moveQty !== '' && !moveValid && moveTo ? `Enter 1 to ${unsold}, the number of unsold units here.` : '')}
+          </div>
+        </div>
+      )}
+
+      {data.variant_hint?.kind === 'specific' && data.variant_hint.others.length > 0 && !data.family && (
+        <div className="card" style={dim({ padding: '14px 18px' })}>
+          <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 8 }}>Other variants</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {data.variant_hint.others.map((o) => (
+              <span
+                key={o.label}
+                style={{
+                  padding: '4px 11px',
+                  borderRadius: 999,
+                  fontSize: 12,
+                  background: 'var(--field-bg)',
+                  color: o.product_id ? 'var(--text-secondary)' : 'var(--text-faint)'
+                }}
+              >
+                {o.label}
+                <span style={{ marginLeft: 7, fontSize: 11, opacity: 0.8 }}>{o.product_id ? 'owned' : 'none bought'}</span>
+              </span>
+            ))}
           </div>
         </div>
       )}

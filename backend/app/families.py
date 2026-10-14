@@ -166,7 +166,7 @@ def auto_group(db: Session, user_id: str) -> int:
     """
     Group products that are versions of one item, with no one asking. Runs
     whenever the product list is read, so a new version that shows up later
-    joins its family on its own. Returns how many products were newly grouped.
+    joins its family on its own. Returns how many products were newly grouped or marked.
 
     Deliberately cautious -- a wrong grouping hides real numbers:
       * Needs the same set AND the same product line (a catalog-matched
@@ -217,9 +217,133 @@ def auto_group(db: Session, user_id: str) -> int:
                 p.family_id = family.id
                 p.variant_kind = info["kind"] or "specific"
                 grouped += 1
-    if grouped:
+    marked = _mark_kinds(db, products, units)
+    if grouped or marked:
         db.flush()
-    return grouped
+    return grouped + marked
+
+
+def _mark_kinds(db: Session, products: list[models.Product], units: dict[str, int]) -> int:
+    """Give a product that reads as a variant its kind, even when it's the only
+    one you bought (the Mega Gardevoir poster, the random 30th Celebration
+    tin). Skips any product you've set yourself: choosing "Standard" or
+    taking it out of a family sets family_opt_out, which also keeps this away."""
+    marked = 0
+    for p in products:
+        if p.variant_kind is not None or p.family_opt_out or not units.get(p.id):
+            continue
+        kind = parse_product(p.canonical_name)["kind"]
+        if kind:
+            p.variant_kind = kind
+            marked += 1
+    return marked
+
+
+def set_lookup(db: Session) -> dict[str, tuple[Optional[str], str]]:
+    """Every set the catalog knows, by normalized name -> (series, set)."""
+    out: dict[str, tuple[Optional[str], str]] = {}
+    for (raw,) in db.query(models.CatalogProduct.set_name).distinct():
+        series, set_ = split_set(raw)
+        if set_ and set_ not in {"Miscellaneous Cards & Products", "Miscellaneous Cards"}:
+            out.setdefault(_norm(set_), (series, set_))
+    return out
+
+
+def product_set(db: Session, product: models.Product, lookup: Optional[dict] = None) -> dict:
+    """Which set (and series) a product belongs to: from its catalog match, or
+    failing that a known set named inside its own name. Many products have
+    neither -- the catalog files standalone products under "Miscellaneous"."""
+    if product.catalog_match_status == "confirmed" and product.catalog_product_id:
+        cp = db.get(models.CatalogProduct, product.catalog_product_id)
+        series, set_ = split_set(cp.set_name if cp else None)
+        if set_ and set_ not in {"Miscellaneous Cards & Products", "Miscellaneous Cards"}:
+            return {"series_name": series, "set_name": set_}
+        return {"series_name": None, "set_name": None}
+    lookup = lookup if lookup is not None else set_lookup(db)
+    name = _norm(product.canonical_name)
+    for key in sorted(lookup, key=len, reverse=True):
+        if len(key) >= 5 and key in name:
+            series, set_ = lookup[key]
+            return {"series_name": series, "set_name": set_}
+    return {"series_name": None, "set_name": None}
+
+
+def variant_hint(db: Session, user_id: str, product: models.Product) -> Optional[dict]:
+    """For a product that is one variant of something -- even if you only ever
+    bought this one -- which variant it is and what the others are, so the
+    product screen can show them. Other variants come from the catalog (the
+    same product line in the same set) or, for a random product, from the
+    options its own name lists ("Sylveon or Greninja")."""
+    info = parse_product(product.canonical_name)
+    if not info["variant"] and info["kind"] != "random":
+        return None
+    mine = {
+        (_norm(i["line"]), _norm(i["variant"] or "")): p
+        for p in db.query(models.Product).filter_by(user_id=user_id)
+        if (i := parse_product(p.canonical_name))["variant"]
+    }
+
+    def owned(variant: str) -> Optional[str]:
+        for (line, v), p in mine.items():
+            if v == _norm(variant) and line == _norm(info["line"]):
+                return p.id
+        return None
+
+    others: list[dict] = []
+    if info["kind"] == "random" and info["variant"]:
+        for option in random_options(info["variant"]):
+            others.append({"label": option, "product_id": owned(option)})
+    elif info["variant"] and product.catalog_product_id:
+        cp = db.get(models.CatalogProduct, product.catalog_product_id)
+        if cp and cp.set_name:
+            from app import catalog  # lazy: catalog imports this module's helpers
+
+            seen = {_norm(info["variant"])}
+            for sib in db.query(models.CatalogProduct).filter_by(set_name=cp.set_name, category=cp.category):
+                if sib.id == cp.id or re.search(r"\b(case|set of|display)\b", sib.name, re.I):
+                    continue
+                std = parse_product(catalog.standard_pokemon_name(sib.name, sib.set_name, catalog.colon_variant(db, sib)))
+                if _norm(std["line"]) == _norm(info["line"]) and std["variant"] and _norm(std["variant"]) not in seen:
+                    seen.add(_norm(std["variant"]))
+                    others.append({"label": std["variant"], "product_id": owned(std["variant"])})
+    return {"variant": info["variant"], "kind": info["kind"] or "specific", "others": others}
+
+
+def resolve_to_new_variant(
+    db: Session, user_id: str, source: models.Product, label: str, quantity: int
+) -> models.Product:
+    """A random product's units turned out to be a variant you don't have a
+    product for yet (you opened the tins and got Sylveon). Creates that
+    variant's product, puts it in a family with the random one, and moves the
+    units."""
+    from app import products as products_module
+
+    info = parse_product(source.canonical_name)
+    if source.variant_kind != "random" or not info["variant"]:
+        raise ValueError("Only a random product can turn into one of its variants.")
+    options = {_norm(o): o for o in random_options(info["variant"])}
+    if _norm(label) not in options:
+        raise ValueError(f"“{label}” isn't one of this product's variants.")
+    label = options[_norm(label)]
+    name = f"{info['base']} - {label}"
+    target = products_module.resolve_product(db, user_id, name, category=source.category)
+    target.canonical_name = name
+    target.product_type = target.product_type or source.product_type
+    if target.id == source.id:
+        raise ValueError("That is the same product.")
+    if source.family_id is None:
+        family = models.ProductFamily(user_id=user_id, name=info["base"])
+        db.add(family)
+        db.flush()
+        source.family_id = family.id
+    if target.family_id not in (None, source.family_id):
+        raise ValueError(f"“{target.canonical_name}” is already in another family.")
+    target.family_id = source.family_id
+    target.variant_kind = "specific"
+    target.family_opt_out = False
+    db.flush()
+    resolve_units(db, user_id, source, target, quantity)
+    return target
 
 
 def _product(db: Session, user_id: str, product_id: str) -> models.Product:
@@ -400,6 +524,7 @@ def family_dashboard(db: Session, user_id: str, family: models.ProductFamily) ->
     return {
         "family_id": family.id,
         "name": family.name,
+        **(product_set(db, members[0]) if members else {"series_name": None, "set_name": None}),
         "product_type": Counter(types).most_common(1)[0][0] if types else None,
         "category": Counter(cats).most_common(1)[0][0] if cats else None,
         "total_units": totals["units"],

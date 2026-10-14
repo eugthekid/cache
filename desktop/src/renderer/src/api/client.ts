@@ -373,6 +373,8 @@ export interface FamilyVariant {
 export interface FamilyDashboardData {
   family_id: string
   name: string
+  series_name: string | null
+  set_name: string | null
   product_type: string | null
   category: string | null
   total_units: number
@@ -411,10 +413,20 @@ export interface ProductSale {
   profit: number | null
 }
 
+export interface VariantHint {
+  variant: string | null
+  kind: 'specific' | 'random'
+  /** The other variants, with the product you hold for each (null = never bought). */
+  others: { label: string; product_id: string | null }[]
+}
+
 export interface ProductDashboardData {
   product_id: string
   name: string
   category: string | null
+  series_name: string | null
+  set_name: string | null
+  variant_hint: VariantHint | null
   total_units: number
   order_placed: number
   in_transit: number
@@ -757,8 +769,13 @@ export const api = {
       patch<Product>(`/products/${id}`, { canonical_name: canonicalName, category }),
     update: (id: string, fields: ProductFields) => patch<Product>(`/products/${id}`, fields),
     /** Move unsold units of a random version to a specific one. */
-    resolve: (id: string, toProductId: string, quantity: number) =>
-      post<ProductDashboardData>(`/products/${id}/resolve`, { to_product_id: toProductId, quantity }),
+    /** Move units to a sibling product, or to a variant that has no product yet
+     * (pass `{ variant }` and it is created). */
+    resolve: (id: string, to: { productId: string } | { variant: string }, quantity: number) =>
+      post<ProductDashboardData>(
+        `/products/${id}/resolve`,
+        'productId' in to ? { to_product_id: to.productId, quantity } : { to_variant: to.variant, quantity }
+      ),
     dashboard: (id: string) => get<ProductDashboardData>(`/products/${id}/dashboard`),
     /** Sets each listed retailer's stage counts; returns the refreshed dashboard. */
     updateCounts: (id: string, retailers: RetailerCountEdit[]) =>

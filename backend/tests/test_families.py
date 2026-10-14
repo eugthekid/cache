@@ -229,5 +229,32 @@ db.expire_all()
 check("ungrouping removes the family but not a single unit", (db.query(models.ProductFamily).count(), db.query(models.InventoryItem).count()), (0, before))
 check("the list shows the products individually again", len([r for r in client.get("/products/grouped").json() if r["family_id"]]), 0)
 
+# --- a variant you only bought once, and a random product with no siblings -------------
+TIN = "Pokémon TCG: 30th Celebration Tin - Sylveon or Greninja"
+p_tin = product(TIN, "tin")
+stock(p_tin, "Target", 6, "in_hand", 30.0)
+p_one = product("Pokémon TCG: Ascended Heroes Premium Poster Collection - Mega Gardevoir", "gard")
+stock(p_one, "Target", 4, "in_hand", 56.0)
+client.get("/products/grouped")
+db.expire_all()
+check("a lone random product is marked random from its name", db.get(models.Product, p_tin.id).variant_kind, "random")
+check("a lone variant is marked specific", db.get(models.Product, p_one.id).variant_kind, "specific")
+check("and none of that makes a family", (db.get(models.Product, p_tin.id).family_id, db.get(models.Product, p_one.id).family_id), (None, None))
+hint = client.get(f"/products/{p_tin.id}/dashboard").json()["variant_hint"]
+check("a random product lists the variants it could be", [o["label"] for o in hint["others"]], ["Sylveon", "Greninja"])
+check("choosing Standard sticks (not re-marked)", client.patch(f"/products/{p_one.id}", json={"variant_kind": ""}).json()["variant_kind"], None)
+client.get("/products/grouped")
+db.expire_all()
+check("automatic marking respects that choice", db.get(models.Product, p_one.id).variant_kind, None)
+
+res = client.post(f"/products/{p_tin.id}/resolve", json={"to_variant": "Sylveon", "quantity": 2})
+check("opening tins as a variant with no product yet works", res.status_code, 200)
+db.expire_all()
+sylveon = db.query(models.Product).filter_by(canonical_name="Pokémon TCG: 30th Celebration Tin - Sylveon").one()
+check("the new variant's product is specific and shares a family with the random one", (sylveon.variant_kind, sylveon.family_id is not None and sylveon.family_id == db.get(models.Product, p_tin.id).family_id), ("specific", True))
+check("two units moved", (len(client.get(f"/products/{sylveon.id}/dashboard").json()["retailers"]) , client.get(f"/products/{sylveon.id}/dashboard").json()["total_units"]), (1, 2))
+check("the random product has four left", client.get(f"/products/{p_tin.id}/dashboard").json()["total_units"], 4)
+check("a variant the name doesn't list is refused", client.post(f"/products/{p_tin.id}/resolve", json={"to_variant": "Pikachu", "quantity": 1}).status_code, 422)
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

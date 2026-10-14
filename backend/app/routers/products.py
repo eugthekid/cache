@@ -265,6 +265,8 @@ def _dashboard(db: Session, user: models.User, product: models.Product) -> dict:
     data = product_dashboard.build_dashboard(db, user.id, product)
     data["product_type"] = product.product_type
     data["variant_kind"] = product.variant_kind
+    data.update(families.product_set(db, product))
+    data["variant_hint"] = families.variant_hint(db, user.id, product)
     data["family"] = None
     data["siblings"] = []
     if product.family_id:
@@ -304,11 +306,14 @@ def product_dashboard_view(product_id: str, db: Session = Depends(get_db)):
 def resolve_units(product_id: str, body: schemas.ResolveUnits, db: Session = Depends(get_db)):
     """Units of a random version that turned out to be a specific one."""
     user, source = _get_product(db, product_id)
-    target = db.query(models.Product).filter_by(id=body.to_product_id, user_id=user.id).first()
-    if target is None:
-        raise HTTPException(status_code=404, detail="Product not found")
     try:
-        families.resolve_units(db, user.id, source, target, body.quantity)
+        if body.to_variant:
+            families.resolve_to_new_variant(db, user.id, source, body.to_variant, body.quantity)
+        else:
+            target = db.query(models.Product).filter_by(id=body.to_product_id, user_id=user.id).first()
+            if target is None:
+                raise HTTPException(status_code=404, detail="Product not found")
+            families.resolve_units(db, user.id, source, target, body.quantity)
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=422, detail=str(exc))
@@ -380,6 +385,8 @@ def update_product(
         if kind not in (None, *families.VARIANT_KINDS):
             raise HTTPException(status_code=422, detail="Variant kind must be standard, specific or random.")
         product.variant_kind = kind
+        if kind is None:
+            product.family_opt_out = True  # "Standard" is a choice automatic marking must respect
     db.commit()
     db.refresh(product)
     return _product_out(db, product)

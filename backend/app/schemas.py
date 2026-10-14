@@ -541,10 +541,25 @@ class ProductSibling(BaseModel):
     unsold: int
 
 
+class VariantOther(BaseModel):
+    label: str
+    # The product you hold for it, if any (None = never bought).
+    product_id: Optional[str] = None
+
+
+class VariantHint(BaseModel):
+    variant: Optional[str] = None
+    kind: str
+    others: list[VariantOther] = []
+
+
 class ProductDashboard(BaseModel):
     product_id: str
     name: str
     category: Optional[str] = None
+    series_name: Optional[str] = None
+    set_name: Optional[str] = None
+    variant_hint: Optional[VariantHint] = None
     product_type: Optional[str] = None
     variant_kind: Optional[str] = None
     # Set when this product is one version in a family.
@@ -702,6 +717,8 @@ class UngroupedProduct(BaseModel):
 class FamilyDashboard(BaseModel):
     family_id: str
     name: str
+    series_name: Optional[str] = None
+    set_name: Optional[str] = None
     product_type: Optional[str] = None
     category: Optional[str] = None
     total_units: int
@@ -717,5 +734,8 @@ class FamilyDashboard(BaseModel):
 
 
 class ResolveUnits(BaseModel):
-    to_product_id: str
+    # Either an existing sibling product, or the name of a variant that
+    # doesn't have a product yet (created on the spot).
+    to_product_id: Optional[str] = None
+    to_variant: Optional[str] = None
     quantity: int
