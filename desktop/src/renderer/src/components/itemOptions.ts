@@ -18,7 +18,14 @@ export const PRODUCT_TYPES = [
   'Other'
 ]
 
-const DEFAULT_CATEGORIES = ['Pokémon TCG', 'One Piece', 'Sneakers / Clothing']
+const DEFAULT_CATEGORIES = [
+  'Pokémon',
+  'One Piece',
+  'Riftbound',
+  'Magic: The Gathering',
+  'Sneakers / Clothing',
+  'Collectibles'
+]
 
 /** The defaults plus whatever categories already exist in the data, so a
  * category you've used before is always offered. */

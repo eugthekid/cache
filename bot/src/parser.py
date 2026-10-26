@@ -247,9 +247,14 @@ def classify_checkout(embed: Any, keyword: str) -> Optional[tuple[str, Optional[
 # list short and easy to extend rather than trying to be exhaustive; a
 # wrong guess costs the user one click to correct in the Orders screen,
 # so it's fine to be approximate.
+# Checked in order, so the specific games come before Pokémon's generic
+# "booster" / "tcg" hints (a One Piece booster box is not Pokémon).
 _CATEGORY_HINTS = {
+    "One Piece": ("one piece",),
+    "Riftbound": ("riftbound",),
+    "Magic: The Gathering": ("magic: the gathering", "magic the gathering", "mtg", "secret lair"),
     "Sneakers": ("jordan", "nike", "yeezy", "dunk", "new balance", "adidas", "sneaker"),
-    "Pokémon TCG": ("pokemon", "pokémon", "tcg", "booster", "elite trainer"),
+    "Pokémon": ("pokemon", "pokémon", "tcg", "booster", "elite trainer"),
 }
 
 

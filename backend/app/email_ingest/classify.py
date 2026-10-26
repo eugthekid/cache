@@ -31,6 +31,7 @@ class Retailer(str, Enum):
     POKEMON_CENTER = "pokemoncenter.com"
     TARGET = "target.com"
     WALMART = "walmart.com"
+    ZUMIEZ = "zumiez.com"
 
 
 class EmailKind(str, Enum):
@@ -143,6 +144,23 @@ _WALMART_ARRIVED = re.compile(r"^arrived:", re.I)
 _WALMART_CANCELLED = re.compile(r"^canceled: delivery from order #(\S+)", re.I)
 
 
+# --- Zumiez ------------------------------------------------------------------
+# Real subjects observed (orders #35000118411 and #35000119158, Oct 2026):
+#   "We have received your order #35000118411"           (confirmation)
+#   "We've shipped a package to you!"                     (shipped, no number)
+#   "A package for order #35000118411 is out for delivery"
+#   "A package for order #35000118411 has been delivered"
+# The shipped and confirmation subjects are generic enough that another
+# store could send the same words, so parse_zumiez.is_zumiez() checks the
+# body before anything is claimed (see ingest._zumiez_claims). The one
+# cancellation seen ("OH NO! YOUR RECENT ZUMIEZ ORDER HAS BEEN CANCELLED")
+# carried no order number and is deliberately left unrecognized.
+_ZUMIEZ_CONFIRM = re.compile(r"^we have received your order #(\d{8,})", re.I)
+_ZUMIEZ_SHIPPED = re.compile(r"^we['’]?ve shipped a package to you", re.I)
+_ZUMIEZ_OUT_FOR_DELIVERY = re.compile(r"^a package for order #(\d{8,}) is out for delivery", re.I)
+_ZUMIEZ_DELIVERED = re.compile(r"^a package for order #(\d{8,}) has been delivered", re.I)
+
+
 def classify(subject: str) -> Classification:
     """
     Pure function: subject line in, best-guess classification out.
@@ -185,5 +203,14 @@ def classify(subject: str) -> Classification:
         return Classification(Retailer.WALMART, EmailKind.SHIPPED, None)
     if _WALMART_ARRIVED.search(s):
         return Classification(Retailer.WALMART, EmailKind.ARRIVED, None)
+
+    if m := _ZUMIEZ_CONFIRM.search(s):
+        return Classification(Retailer.ZUMIEZ, EmailKind.CONFIRMATION, m.group(1))
+    if _ZUMIEZ_SHIPPED.search(s):
+        return Classification(Retailer.ZUMIEZ, EmailKind.SHIPPED, None)
+    if m := _ZUMIEZ_OUT_FOR_DELIVERY.search(s):
+        return Classification(Retailer.ZUMIEZ, EmailKind.SHIPPED, m.group(1))
+    if m := _ZUMIEZ_DELIVERED.search(s):
+        return Classification(Retailer.ZUMIEZ, EmailKind.ARRIVED, m.group(1))
 
     return Classification(None, EmailKind.UNRECOGNIZED, None)

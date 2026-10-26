@@ -55,6 +55,17 @@ const BRANDS: Record<string, Brand> = {
         </>
       )
   },
+  zumiez: {
+    color: '#E6E6E6',
+    mark: (size) =>
+      svg(
+        size,
+        <>
+          <rect x="1" y="1" width="22" height="22" rx="5" fill="#111111" />
+          <path d="M7 7h10v2.2L10 15h7v2H7v-2.2L14 9H7z" fill="#FFFFFF" />
+        </>
+      )
+  },
   walmart: {
     color: '#4FB0FF',
     mark: (size) =>

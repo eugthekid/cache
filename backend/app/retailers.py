@@ -50,6 +50,7 @@ DISPLAY_NAMES = {
     "amazon.com": "Amazon",
     "nyc.gov": "NYC City Store",
     "menards.com": "Menards",
+    "zumiez.com": "Zumiez",
 }
 
 # Retailers the product screen's "Edit counts" can add units for by hand --

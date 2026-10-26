@@ -46,7 +46,7 @@ CATEGORY_IDS = {
 }
 
 # Display label for Product.category, keyed by CatalogProduct.category.
-CATEGORY_LABELS = {"pokemon": "Pokémon TCG", "onepiece": "One Piece"}
+CATEGORY_LABELS = {"pokemon": "Pokémon", "onepiece": "One Piece"}
 
 
 _NO_REAL_SET = {"Miscellaneous Cards & Products", "Miscellaneous Cards"}

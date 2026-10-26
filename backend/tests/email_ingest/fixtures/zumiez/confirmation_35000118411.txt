@@ -1,0 +1,145 @@
+SUBJECT: We have received your order #35000118411
+DATE: Sun, 18 Oct 2026 00:02:44 +0000
+MSGID: <COd7bS1PQ_qhoMbtKZNNdQ@geopod-ismtpd-89>
+---
+                    |  |
+
+                                |  |  |  |  |  |  |  |
+
+                    |  |  |  |  |  |  |  |  |
+
+            |  |  |  |  |  |  |  |  |
+
+    |  |  |  |  |  |  |  |  |  |
+
+    |  |
+
+        | Order Confirmation
+                Thanks for shopping with us, Test Buyer! |
+
+        |  |
+
+        | Your Order #35000118411
+
+                We wanted to let you know that:
+
+                    Your order was received and is in process.
+                    We will follow up with another e-mail once your items are on their way.
+
+                If you have ordered multiple items, they may be shipped separately. You will receive an email confirmation for each shipment with the details for that package.
+                In addition, you will see a separate charge for each package as they ship. Your order total will show in your account as a pending authorization. The separate shipment charges will never exceed the amount of the full order total.
+
+                    In the meantime, all the details are below, and you can check the status of all the items on your order using
+
+                        Order Status.
+
+                    Please remember the window for order changes or cancellation is small, and we cannot guarantee these requests.
+
+                Placed on Oct 17, 2026, 5:02:43 PM |
+
+                    | Billing Info
+                            Test Buyer
+
+123 Example Street
+
+Springfield,  New York, 00000
+United States
+T: +10000000000 | Shipping Info
+                            Test Buyer
+
+123 Example Street
+
+Springfield,  New York, 00000
+United States
+T: +10000000000 |
+
+                    | Payment Method
+
+    ApplePay |
+
+            | Items | Qty | Price |
+
+            |  | Santa Cruz x Pokémon TCG Blind Bag Skateboard Deck
+
+                    SKU: us41298006980102
+
+                                                            Size
+
+                                    8.0 |
+
+|  | Santa Cruz x Pokémon TCG Blind Bag Skateboard Deck
+
+                    SKU: us41298006980102
+
+                                                            Size
+
+                                    8.0 | Santa Cruz x Pokémon TCG Blind Bag Skateboard Deck
+
+                    SKU: us41298006980102
+
+                                                            Size
+
+                                    8.0 | 1 | $139.95 |
+
+    | Subtotal | $139.95 |
+
+    | Shipping & Handling | $0.00 |
+
+| Tax | $12.42 |
+
+    | Grand Total | $152.37 |
+
+        | Grand Total | $152.37 | $152.37 |
+
+    | Grand Total | $152.37 | $152.37 | $152.37 |
+
+            |  |
+
+    |  |  |
+
+        |  |
+
+        |  |
+
+    |  |  |
+
+        |  |
+
+                    |  |  |  |  |  |  |
+
+        |  |  |  |  |  |  |  |
+
+        | Brands
+
+                     |
+
+                            Contact Us
+
+                     |
+
+                            Gift Cards |
+
+        |  |
+
+        | Please know you're unable to opt out of transactional emails. |
+
+        |  |
+
+        | Privacy
+                 |
+
+                   Store Pickup
+
+                4001 204th Street Southwest, Lynnwood, WA 98036 |
+
+    | Privacy
+                 |
+
+                   Store Pickup
+
+                4001 204th Street Southwest, Lynnwood, WA 98036 | Privacy
+                 |
+
+                   Store Pickup
+
+                4001 204th Street Southwest, Lynnwood, WA 98036 |

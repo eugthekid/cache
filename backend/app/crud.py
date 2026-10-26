@@ -768,6 +768,12 @@ def update_order(db: Session, order: models.Order, order_in) -> models.Order:
 
     for field, value in updates.items():
         setattr(order, field, value)
+    if "site" in updates:
+        # The store shown everywhere is `retailer`, derived from `site` at
+        # ingest. Editing the site by hand must re-derive it, or the order
+        # keeps showing as an unknown retailer (found live: a Walmart order
+        # whose site was typed in later stayed "Unknown retailer").
+        order.retailer = retailers.display_name(order.site)
     sync_tracking_fields(order, previous_shipping_status)
     # Status is one of the fields this may have just changed -- reconcile
     # unconditionally rather than diffing old-vs-new: it's cheap (one

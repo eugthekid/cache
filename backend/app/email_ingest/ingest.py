@@ -42,6 +42,7 @@ from typing import Any, Optional
 
 from . import parse_pokemoncenter as pc
 from . import parse_target as target
+from . import parse_zumiez as zumiez
 from .classify import Classification, EmailKind, Retailer, classify
 
 # Both retailers' "Month DD, YYYY" purchase-date strings share this exact
@@ -128,6 +129,8 @@ def build_claims(
         return _pc_claims(classification, body, message_id, occurred_at)
     if classification.retailer == Retailer.TARGET:
         return _target_claims(classification, body, message_id, occurred_at)
+    if classification.retailer == Retailer.ZUMIEZ:
+        return _zumiez_claims(classification, body, message_id, occurred_at)
     # Retailer.WALMART: no parser built yet (see module docstring).
     return []
 
@@ -354,4 +357,101 @@ def _target_claims(
         ]
 
     # EmailKind.ARRIVED / PAYMENT_PENDING: not built this pass.
+    return []
+
+
+def _zumiez_claims(
+    classification: Classification, body: str, message_id: str, occurred_at: Optional[str]
+) -> list[Claim]:
+    """See parse_zumiez.py for the four templates. Two of Zumiez's subjects
+    are generic ("We've shipped a package to you!"), so nothing is claimed
+    unless the body is recognisably Zumiez AND names an order number."""
+    if not zumiez.is_zumiez(body):
+        return []
+    site = Retailer.ZUMIEZ.value
+    order_number = classification.order_number or zumiez.parse_order_number(body)
+    if not order_number:
+        return []
+
+    if classification.kind == EmailKind.CONFIRMATION:
+        purchased_at = zumiez.parse_purchased_at(body)
+        ship_to_address = zumiez.parse_ship_to_address(body)
+        return [
+            Claim(
+                external_id=f"{message_id}:confirm:{i}",
+                status="success",
+                site=site,
+                order_number=order_number,
+                raw_product_text=line.raw_product_text,
+                quantity=line.quantity,
+                unit_price=line.unit_price,
+                external_sku=line.external_sku,
+                ship_to_address=ship_to_address,
+                purchased_at=purchased_at,
+                occurred_at=occurred_at,
+            )
+            for i, line in enumerate(zumiez.parse_confirmation(body))
+        ]
+
+    tracking_number = zumiez.parse_tracking_number(body)
+
+    if classification.kind == EmailKind.SHIPPED:
+        lines = zumiez.parse_shipped_lines(body)
+        if lines:
+            # "We've shipped a package to you!" -- items, no tracking number.
+            # The SKU is what lets each claim find its line (matching rule 1).
+            return [
+                Claim(
+                    external_id=f"{message_id}:ship:{i}",
+                    status="success",
+                    site=site,
+                    order_number=order_number,
+                    external_sku=line.external_sku,
+                    quantity=line.quantity,
+                    shipping_status="in_transit",
+                    occurred_at=occurred_at,
+                )
+                for i, line in enumerate(lines)
+            ]
+        # "Out for delivery": order and tracking number only, no item detail.
+        # Like Target's ARRIVED, this relies on matching's single-candidate
+        # rule, so on a multi-package order it may not attach (untested --
+        # no real multi-item Zumiez order yet).
+        eta = zumiez.parse_eta(body)
+        return [
+            Claim(
+                external_id=f"{message_id}:out_for_delivery",
+                status="success",
+                site=site,
+                order_number=order_number,
+                tracking_number=tracking_number,
+                shipping_status="in_transit",
+                tracking_detail=f"Out for delivery (ETA {eta})" if eta else "Out for delivery",
+                occurred_at=occurred_at,
+            )
+        ]
+
+    if classification.kind == EmailKind.ARRIVED:
+        # No delivery date in the body; the email is sent when the package
+        # is marked delivered, so the email's own date is the delivery date.
+        delivered_on = None
+        if occurred_at:
+            try:
+                d = datetime.fromisoformat(occurred_at)
+                delivered_on = f"{d:%B} {d.day}, {d.year}"
+            except ValueError:
+                delivered_on = None
+        return [
+            Claim(
+                external_id=f"{message_id}:arrived",
+                status="success",
+                site=site,
+                order_number=order_number,
+                tracking_number=tracking_number,
+                shipping_status="delivered",
+                tracking_detail=f"Delivered {delivered_on}" if delivered_on else "Delivered",
+                occurred_at=occurred_at,
+            )
+        ]
+
     return []
