@@ -195,6 +195,12 @@ def merge_products(db: Session, user_id: str, source_id: str, target_id: str) ->
         )
 
     db.delete(source)
+    db.flush()
+    # The two products may each have held one source's copy of the same
+    # purchase; now that they're one product, those rows would count it twice.
+    from app import crud  # lazy: crud imports this module
+
+    crud.merge_duplicate_orders(db, user_id, target_id)
     db.commit()
     return moved
 

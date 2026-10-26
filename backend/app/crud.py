@@ -30,6 +30,83 @@ def live_items(db: Session):
     return db.query(models.InventoryItem).filter(models.InventoryItem.deleted_at.is_(None))
 
 
+_UNIT_PROGRESS = {"sold": 4, "in_hand": 3, "in_transit": 2, "not_shipped": 1}
+
+
+def merge_duplicate_orders(db: Session, user_id: str, product_id: str) -> int:
+    """
+    Fold together order rows that are one purchase seen twice: the same
+    order number and product, one row from Discord and one from email.
+
+    How it happens: the two sources name a product differently ("30th
+    Collection Tin Trading Cards (Styles May Vary)" vs "30th Celebration Tin
+    (Sylveon or Greninja)"), so at ingest they resolved to two products and
+    matching (find_existing_line) had no reason to pair them. Merging those
+    products afterwards makes them the same product but leaves both rows --
+    and both rows' units -- so the purchase is counted twice. Found live
+    2026-10-22: 4 phantom "order placed" tins and 4 phantom stickers.
+
+    Only merges when it's unambiguous: exactly two rows for that order
+    number and product, from two different source types, with the same
+    quantity. Two rows from ONE source are two lines of one cart (real cart
+    P0035996055), never a duplicate, so they're left alone.
+
+    The row whose units have progressed furthest (sold, in hand ...) is
+    kept, so recorded sales stay attached; the other's messages are moved
+    onto it (so a resync can't recreate it) and the row and its units go.
+    A duplicate whose own units were already sold is skipped -- that needs
+    a person to look at it. Returns how many rows were merged away.
+    """
+    rows = (
+        live_orders(db)
+        .filter(models.Order.user_id == user_id, models.Order.product_id == product_id)
+        .filter(models.Order.order_number.isnot(None))
+        .all()
+    )
+    source_type = {s.id: s.type for s in db.query(models.Source).all()}
+    by_number: dict[str, list[models.Order]] = {}
+    for order in rows:
+        key = matching.normalize_order_number(order.order_number)
+        if key:
+            by_number.setdefault(key, []).append(order)
+
+    def units(order: models.Order) -> list[models.InventoryItem]:
+        return live_items(db).filter(models.InventoryItem.order_id == order.id).all()
+
+    def progress(order: models.Order) -> tuple:
+        items = units(order)
+        return (
+            sorted((_UNIT_PROGRESS.get(i.status, 0) for i in items), reverse=True),
+            source_type.get(order.source_id) == "email_account",
+        )
+
+    merged = 0
+    for pair in by_number.values():
+        if len(pair) != 2:
+            continue
+        a, b = pair
+        if source_type.get(a.source_id) == source_type.get(b.source_id):
+            continue
+        if (a.quantity or 1) != (b.quantity or 1):
+            continue
+        keep, drop = (a, b) if progress(a) >= progress(b) else (b, a)
+        if any(i.status == "sold" for i in units(drop)):
+            continue
+        db.query(models.IngestedMessage).filter_by(order_id=drop.id).update(
+            {"order_id": keep.id}, synchronize_session=False
+        )
+        if drop.user_overrides and not keep.user_overrides:
+            keep.user_overrides = drop.user_overrides
+        db.query(models.InventoryItem).filter(models.InventoryItem.order_id == drop.id).delete(
+            synchronize_session=False
+        )
+        db.delete(drop)
+        db.flush()
+        resolve_order_from_messages(db, keep)
+        merged += 1
+    return merged
+
+
 def delete_orders(db: Session, order_ids: list[str]) -> int:
     """
     Really deletes orders and the units they spawned, and marks their
